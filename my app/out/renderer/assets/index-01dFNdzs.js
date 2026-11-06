@@ -51639,7 +51639,6 @@ function IdeaDialog({
   onClose
 }) {
   const save = useApiMutation("plan.save", INV$4);
-  const approvePost = useApiMutation("posts.approve", ["plan.", "posts.", "content."]);
   const idea = target && "id" in target ? target : null;
   const [f2, setF] = reactExports.useState({ plannedDate: "", title: "", format: "free", hook: "", description: "" });
   const [typing, setTyping] = reactExports.useState(false);
@@ -51728,6 +51727,7 @@ function PlanPage() {
   const del = useApiMutation("plan.delete", INV$4);
   const delMany = useApiMutation("plan.deleteMany", INV$4);
   const save = useApiMutation("plan.save", INV$4);
+  const approvePost = useApiMutation("posts.approve", ["plan.", "posts.", "content."]);
   const [days, setDays] = reactExports.useState(7);
   const [perDay, setPerDay] = reactExports.useState(1);
   const [formats, setFormats] = reactExports.useState(["top_list", "story", "quiz", "explainer"]);
