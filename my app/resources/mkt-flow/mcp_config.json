@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "marketing-flow": {
+      "command": "node",
+      "args": [
+        "c:\\Users\\iTplusHN\\OneDrive\\Máy tính\\vibe - code\\MKT FLOW\\apps\\marketing-flow-desktop\\server\\mcp-server.js"
+      ],
+      "env": {
+        "PORT": "3002"
+      }
+    }
+  }
+}

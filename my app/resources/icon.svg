@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="omniGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B5CF6" />
+      <stop offset="50%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#06B6D4" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#0B0F19" />
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="none" stroke="url(#omniGrad)" stroke-width="6" opacity="0.85" />
+  <circle cx="128" cy="128" r="64" fill="none" stroke="url(#omniGrad)" stroke-width="18" />
+  <circle cx="128" cy="128" r="24" fill="url(#omniGrad)" />
+  <path d="M128 36 L128 54 M128 202 L128 220 M36 128 L54 128 M202 128 L220 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round" />
+</svg>

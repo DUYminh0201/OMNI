@@ -1,0 +1,7 @@
+{
+  "name": "@marketing-flow/desktop",
+  "private": true,
+  "version": "1.2.2",
+  "type": "module",
+  "description": "Marketing Flow desktop shell and integrated mini apps"
+}

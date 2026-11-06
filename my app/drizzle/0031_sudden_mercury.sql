@@ -1,0 +1,1 @@
+ALTER TABLE `content_ideas` ADD `image_project_id` text REFERENCES image_projects(id);

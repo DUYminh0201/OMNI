@@ -1,0 +1,1 @@
+ALTER TABLE `film_assets` ADD `start_source` text DEFAULT 'auto' NOT NULL;

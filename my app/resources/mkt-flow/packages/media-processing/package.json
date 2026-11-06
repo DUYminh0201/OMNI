@@ -1,0 +1,7 @@
+{
+  "name": "@marketing-flow/media-processing",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Shared FFmpeg and source-separation helpers for Marketing Flow"
+}

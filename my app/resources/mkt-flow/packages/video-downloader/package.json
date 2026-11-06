@@ -1,0 +1,7 @@
+{
+  "name": "@marketing-flow/video-downloader",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Shared platform detection for multi-platform video downloads"
+}
