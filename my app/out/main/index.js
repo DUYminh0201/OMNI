@@ -518,6 +518,7 @@ const WorkspaceInput = zod.z.object({
   watermarkPath: zod.z.string().max(1024).nullish(),
   watermarkPosition: zod.z.enum(["tl", "tr", "bl", "br", "center"]).optional(),
   watermarkOpacity: zod.z.number().min(0.05).max(1).optional(),
+  mediaFolder: zod.z.string().max(1024).nullish(),
   tags: zod.z.array(zod.z.string().trim().min(1).max(40)).max(10).optional(),
   aiBudgetUsd: zod.z.number().min(0).max(1e5).nullish(),
   goldenHours: zod.z.array(zod.z.object({ start: hhmm, end: hhmm, weight: zod.z.number().min(0).max(1) })).optional(),
@@ -1670,6 +1671,7 @@ const workspaces = sqliteCore.sqliteTable("workspaces", {
   watermarkPath: sqliteCore.text("watermark_path"),
   watermarkPosition: sqliteCore.text("watermark_position", { enum: ["tl", "tr", "bl", "br", "center"] }).default("br"),
   watermarkOpacity: sqliteCore.real("watermark_opacity").notNull().default(0.85),
+  mediaFolder: sqliteCore.text("media_folder"),
   /** Hashtag / nhãn ngách hiển thị trên thẻ Pocket */
   tags: json("tags").notNull().default([]),
   /** Ngân sách AI (USD/tháng) riêng của Pocket – null = dùng hạn mức chung */
@@ -2499,6 +2501,7 @@ function openDatabase() {
   sqlite.pragma("synchronous = NORMAL");
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
+  try { sqlite.exec("ALTER TABLE workspaces ADD COLUMN media_folder TEXT"); } catch {}
   db = betterSqlite3.drizzle(sqlite, { schema });
   migrator.migrate(db, { migrationsFolder: migrationsFolder() });
   return db;
