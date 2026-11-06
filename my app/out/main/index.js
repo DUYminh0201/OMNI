@@ -798,6 +798,8 @@ const contract = {
   "workspaces.archive": def()(byId),
   "workspaces.delete": def()(byId),
   "workspaces.assignChannels": def()(zod.z.object({ workspaceId: id$1, channelIds: zod.z.array(zod.z.string()) })),
+  "workspaces.pickMediaFolder": def()(zod.z.object({ id: id$1.optional() }).optional()),
+  "workspaces.listMediaFiles": def()(zod.z.object({ id: id$1.optional(), folderPath: zod.z.string().optional() }).optional()),
   /** Pocket đã lưu trữ (ẩn khỏi mọi danh sách) – để xem lại / khôi phục */
   "workspaces.listArchived": def()(none),
   "workspaces.restore": def()(byId),
@@ -1001,7 +1003,8 @@ const contract = {
       days: zod.z.number().int().min(1).max(30),
       perDay: zod.z.number().int().min(1).max(3),
       formats: zod.z.array(zod.z.string().max(80)).max(20).default([]),
-      useTrends: zod.z.boolean().default(false)
+      useTrends: zod.z.boolean().default(false),
+      createDraftPosts: zod.z.boolean().optional()
     })
   ),
   "plan.save": def()(
@@ -1078,6 +1081,8 @@ const contract = {
   /** Trả giờ đăng thật (có thể bị lùi vài phút do giãn cách bài trùng giờ) */
   "posts.reschedule": def()(zod.z.object({ id: id$1, scheduledAt: zod.z.number().int() })),
   "posts.cancel": def()(byId),
+  "posts.approve": def()(byId),
+  "posts.approveMany": def()(zod.z.object({ ids: zod.z.array(id$1) })),
   /** Đăng ngay / thử lại bài đang chờ hoặc bị lỗi */
   "posts.publishNow": def()(byId),
   "posts.worker": def()(none),
@@ -1976,7 +1981,7 @@ const scheduledPosts = sqliteCore.sqliteTable(
     contentItemId: sqliteCore.text("content_item_id").notNull().references(() => contentItems.id, { onDelete: "cascade" }),
     channelId: sqliteCore.text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
     scheduledAt: ts$1("scheduled_at").notNull(),
-    status: sqliteCore.text("status", { enum: ["queued", "publishing", "published", "failed", "cancelled"] }).notNull().default("queued"),
+    status: sqliteCore.text("status", { enum: ["draft", "queued", "publishing", "published", "failed", "cancelled"] }).notNull().default("queued"),
     isGoldenHour: sqliteCore.integer("is_golden_hour", { mode: "boolean" }).notNull().default(false),
     attempts: sqliteCore.integer("attempts").notNull().default(0),
     publishedAt: ts$1("published_at"),
@@ -13338,19 +13343,20 @@ async function planContent(input) {
     try {
       const { data, meta: meta2 } = await aiJson(
         {
-          system: "Bạn là trưởng nhóm nội dung cho page mạng xã hội (video ngắn và bài viết) tại Việt Nam. Lập kế hoạch thực tế, đa dạng, không lặp chủ đề, phù hợp ngách. Không đề xuất nội dung vi phạm bản quyền (dùng lại phim, nhạc, cảnh quay trận đấu của người khác), không tin giả, không giật tít sai sự thật." + brand(input.brandVoice),
+          system: "Bạn là Giám đốc Chiến lược Nội dung & Tăng trưởng Mạng xã hội hàng đầu (Viral Social Content Strategist) tại Việt Nam. Phân tích sâu dữ liệu Page/Kênh hiện tại, ngách kinh doanh và kho tư liệu sản phẩm để lập kế hoạch nội dung đỉnh cao, tối ưu thuật toán phân phối tự nhiên (Facebook Reels/Feed, TikTok, YouTube Shorts). " +
+            "Mục tiêu cốt lõi: 1) TĂNG TỐI ĐA ĐỘ NHẬN DIỆN THƯƠNG HIỆU, 2) TĂNG ĐỘ VIRAL & TIẾP CẬN TỰ NHIÊN (Viral Hook 3s đầu cực mạnh), 3) THÚC ĐẨY CHUYỂN ĐỔI BÁN HÀNG TỰ NHIÊN TIN CẬY. " +
+            "Áp dụng Ma trận Nội dung: 40% Bắt trend/Gây tò mò (Hook 3s đầu cực mạnh), 30% Chia sẻ giá trị/Mẹo ngách hữu ích, 30% Trình diễn sản phẩm thực tế từ kho media (nêu bật USP và CTA kêu gọi hành động). " +
+            "Không đề xuất tin giả, vi phạm bản quyền hay cam kết lố sự thật." + brand(input.brandVoice),
           prompt: [
             `Ngách / chủ đề page: ${input.niche}`,
-            input.topPosts.length ? `Bài hiệu quả nhất gần đây của page (học phong cách, chủ đề người xem thích):
-${input.topPosts.map((t2) => `- ${t2.title} (${t2.views ?? "?"} xem, ${t2.engagements ?? "?"} tương tác)`).join("\n")}` : "Page chưa có số liệu bài đăng.",
-            input.trends.length ? `Xu hướng tìm kiếm hiện tại (chỉ dùng nếu liên quan tới ngách):
-${input.trends.map((t2) => `- ${t2}`).join("\n")}` : "",
-            `Định dạng được dùng:
-${input.formats.map((f) => `- ${f.id}: ${f.label} – ${f.guide}`).join("\n")}`,
-            ideas.length ? `Ý tưởng ĐÃ CÓ ở các ngày trước (không lặp lại chủ đề):
-${ideas.slice(-40).map((x) => `- ${x.title}`).join("\n")}` : "",
+            input.channelInfo ? `Dữ liệu Kênh / Fanpage hiện tại của Pocket:\n${input.channelInfo}` : "",
+            input.productMedia ? `Kho tư liệu ảnh & video sản phẩm của Pocket:\n${input.productMedia}` : "",
+            input.topPosts.length ? `Bài hiệu quả nhất gần đây của page (học phong cách, chủ đề người xem thích):\n${input.topPosts.map((t2) => `- ${t2.title} (${t2.views ?? "?"} xem, ${t2.engagements ?? "?"} tương tác)`).join("\n")}` : "Page chưa có số liệu bài đăng cũ.",
+            input.trends.length ? `Xu hướng tìm kiếm hiện tại (chỉ dùng nếu liên quan tới ngách):\n${input.trends.map((t2) => `- ${t2}`).join("\n")}` : "",
+            `Định dạng được dùng:\n${input.formats.map((f) => `- ${f.id}: ${f.label} – ${f.guide}`).join("\n")}`,
+            ideas.length ? `Ý tưởng ĐÃ CÓ ở các ngày trước (không lặp lại chủ đề):\n${ideas.slice(-40).map((x) => `- ${x.title}`).join("\n")}` : "",
             `Lập ${input.perDay} ý tưởng mỗi ngày cho các ngày: ${dates.join(", ")} (tổng ${dates.length * input.perDay} ý tưởng).`,
-            "format phải là một id trong danh sách trên. hook là câu mở đầu giữ chân người xem trong 3 giây đầu. description 1–3 câu nêu nội dung chính.",
+            "Mỗi ý tưởng: format phải là một id trong danh sách trên. hook là câu mở đầu giữ chân cực mạnh trong 3 giây đầu (giật hook tò mò/đánh trúng insight). description là khung bài viết/caption hoàn chỉnh (thân bài cuốn hút + lời kêu gọi hành động CTA rõ ràng).",
             'Trả về DUY NHẤT một JSON hợp lệ theo đúng mẫu – danh sách phẳng, mỗi ý tưởng một object (mọi khóa đều có giá trị chuỗi, không xuống dòng trong chuỗi): {"ideas":[{"date":"YYYY-MM-DD","format":"id định dạng","title":"tiêu đề","hook":"câu mở đầu","description":"mô tả ngắn"}]}'
           ].filter(Boolean).join("\n"),
           json: true,
@@ -16850,13 +16856,13 @@ const contentHandlers = {
     const db2 = getDb();
     const post = db2.select({ status: scheduledPosts.status }).from(scheduledPosts).where(drizzleOrm.eq(scheduledPosts.id, id2)).get();
     if (!post) throw notFound("bài đăng");
-    if (post.status !== "queued" && post.status !== "failed") {
-      throw new ApiError("CONFLICT", "Chỉ dời lịch được bài đang chờ hoặc bị lỗi");
+    if (post.status !== "queued" && post.status !== "failed" && post.status !== "draft") {
+      throw new ApiError("CONFLICT", "Chỉ dời lịch được bài đang chờ, bản nháp hoặc bị lỗi");
     }
     return db2.transaction((tx) => {
       const at2 = staggerTime(scheduledAt, queuedTimesNear(tx, scheduledAt, id2), staggerPrefs(tx));
-      const row = tx.update(scheduledPosts).set({ scheduledAt: new Date(at2), status: "queued", error: null, attempts: 0, nextAttemptAt: null, updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(scheduledPosts.id, id2)).returning({ contentItemId: scheduledPosts.contentItemId }).get();
-      if (row)
+      const row = tx.update(scheduledPosts).set({ scheduledAt: new Date(at2), status: post.status === "draft" ? "draft" : "queued", error: null, attempts: 0, nextAttemptAt: null, updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(scheduledPosts.id, id2)).returning({ contentItemId: scheduledPosts.contentItemId }).get();
+      if (row && post.status !== "draft")
         tx.update(contentItems).set({ status: "scheduled", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.and(drizzleOrm.eq(contentItems.id, row.contentItemId), drizzleOrm.eq(contentItems.status, "failed"))).run();
       return { scheduledAt: at2 };
     });
@@ -16864,12 +16870,34 @@ const contentHandlers = {
   "posts.cancel": ({ id: id2 }) => {
     const db2 = getDb();
     db2.transaction((tx) => {
-      const post = tx.update(scheduledPosts).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.and(drizzleOrm.eq(scheduledPosts.id, id2), drizzleOrm.inArray(scheduledPosts.status, ["queued", "failed"]))).returning({ contentItemId: scheduledPosts.contentItemId }).get();
+      const post = tx.update(scheduledPosts).set({ status: "cancelled", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.and(drizzleOrm.eq(scheduledPosts.id, id2), drizzleOrm.inArray(scheduledPosts.status, ["draft", "queued", "failed"]))).returning({ contentItemId: scheduledPosts.contentItemId }).get();
       if (!post) throw new ApiError("CONFLICT", "Bài đăng không tồn tại hoặc đã được xử lý");
-      const others = tx.select({ id: scheduledPosts.id }).from(scheduledPosts).where(drizzleOrm.and(drizzleOrm.eq(scheduledPosts.contentItemId, post.contentItemId), drizzleOrm.inArray(scheduledPosts.status, ["queued", "publishing", "published"]))).get();
+      const others = tx.select({ id: scheduledPosts.id }).from(scheduledPosts).where(drizzleOrm.and(drizzleOrm.eq(scheduledPosts.contentItemId, post.contentItemId), drizzleOrm.inArray(scheduledPosts.status, ["draft", "queued", "publishing", "published"]))).get();
       if (!others) {
         tx.update(contentItems).set({ status: "ready", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.and(drizzleOrm.eq(contentItems.id, post.contentItemId), drizzleOrm.inArray(contentItems.status, ["scheduled", "failed"]))).run();
       }
+    });
+  },
+  "posts.approve": ({ id: id2 }) => {
+    const db2 = getDb();
+    return db2.transaction((tx) => {
+      const post = tx.select().from(scheduledPosts).where(drizzleOrm.eq(scheduledPosts.id, id2)).get();
+      if (!post) throw notFound("bài đăng");
+      if (post.status !== "draft") throw new ApiError("CONFLICT", "Bài đăng không ở trạng thái nháp");
+      const updated = tx.update(scheduledPosts).set({ status: "queued", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(scheduledPosts.id, id2)).returning().get();
+      tx.update(contentItems).set({ status: "scheduled", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(contentItems.id, post.contentItemId)).run();
+      return updated;
+    });
+  },
+  "posts.approveMany": ({ ids }) => {
+    const db2 = getDb();
+    return db2.transaction((tx) => {
+      const posts = tx.select().from(scheduledPosts).where(drizzleOrm.and(drizzleOrm.inArray(scheduledPosts.id, ids), drizzleOrm.eq(scheduledPosts.status, "draft"))).all();
+      if (!posts.length) return { approved: 0 };
+      const itemIds = posts.map((p) => p.contentItemId);
+      tx.update(scheduledPosts).set({ status: "queued", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.inArray(scheduledPosts.id, posts.map((p) => p.id))).run();
+      tx.update(contentItems).set({ status: "scheduled", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.inArray(contentItems.id, itemIds)).run();
+      return { approved: posts.length };
     });
   }
 };
@@ -17700,6 +17728,71 @@ const workspaceHandlers = {
     };
     node_fs.writeFileSync(res.filePath, JSON.stringify(data, null, 2), "utf8");
     return { path: res.filePath };
+  },
+  "workspaces.pickMediaFolder": async (input) => {
+    const id2 = input?.id;
+    const db2 = getDb();
+    const ws = id2 ? db2.select().from(workspaces).where(drizzleOrm.eq(workspaces.id, id2)).get() : null;
+    const defaultP = (ws && ws.mediaFolder && node_fs.existsSync(ws.mediaFolder)) ? ws.mediaFolder : electron.app.getPath("documents");
+    const opts = {
+      title: ws ? `Chọn thư mục ảnh & video sản phẩm – ${ws.name}` : "Chọn thư mục ảnh & video sản phẩm",
+      defaultPath: defaultP,
+      properties: ["openDirectory"]
+    };
+    const win = electron.BrowserWindow.getFocusedWindow();
+    const res = win ? await electron.dialog.showOpenDialog(win, opts) : await electron.dialog.showOpenDialog(opts);
+    if (res.canceled || !res.filePaths[0]) return { canceled: true, mediaFolder: ws?.mediaFolder || null };
+    const folder = res.filePaths[0];
+    if (id2 && ws) {
+      db2.update(workspaces).set({ mediaFolder: folder, updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(workspaces.id, id2)).run();
+    }
+    return { canceled: false, mediaFolder: folder };
+  },
+  "workspaces.listMediaFiles": async (input) => {
+    const id2 = input?.id;
+    let folder = input?.folderPath;
+    const db2 = getDb();
+    if (!folder && id2) {
+      const ws = db2.select().from(workspaces).where(drizzleOrm.eq(workspaces.id, id2)).get();
+      folder = ws?.mediaFolder;
+    }
+    if (!folder || !node_fs.existsSync(folder)) {
+      return { mediaFolder: null, files: [], counts: { images: 0, videos: 0 } };
+    }
+    const root = folder;
+    const files = [];
+    const scan = (dir, depth = 0) => {
+      if (depth > 3) return;
+      try {
+        const entries = node_fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const full = node_path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (!entry.name.startsWith(".") && entry.name !== "node_modules") scan(full, depth + 1);
+          } else if (entry.isFile()) {
+            const ext = node_path.extname(entry.name).toLowerCase();
+            const isImg = [".jpg", ".jpeg", ".png", ".webp"].includes(ext);
+            const isVid = [".mp4", ".mov", ".m4v", ".webm"].includes(ext);
+            if (isImg || isVid) {
+              const rel = node_path.relative(root, full).replace(/\\/g, "/");
+              files.push({
+                name: entry.name,
+                relPath: rel,
+                absPath: full,
+                kind: isVid ? "video" : "image",
+                ext: ext.slice(1)
+              });
+            }
+          }
+        }
+      } catch {}
+    };
+    scan(root);
+    const counts = {
+      images: files.filter((f) => f.kind === "image").length,
+      videos: files.filter((f) => f.kind === "video").length
+    };
+    return { mediaFolder: root, files, counts };
   }
 };
 const plainMapper = (sc, durationSec, bible) => ({
@@ -20067,11 +20160,23 @@ function resolveAttachedPath(absPath) {
   if (!user || !node_path.isAbsolute(absPath) || !EXT_MEDIA.has(node_path.extname(absPath).toLowerCase())) return null;
   if (!attached || attached.user !== user || Date.now() - attached.at > 5e3) {
     const set2 = /* @__PURE__ */ new Set();
+    const folders2 = /* @__PURE__ */ new Set();
     for (const r of getDb().select({ paths: contentItems.mediaPaths }).from(contentItems).all())
       for (const p of r.paths) if (node_path.isAbsolute(p)) set2.add(norm$1(p));
-    attached = { at: Date.now(), user, set: set2 };
+    try {
+      for (const w of getDb().select({ f: workspaces.mediaFolder }).from(workspaces).all())
+        if (w.f) folders2.add(norm$1(w.f));
+    } catch {}
+    attached = { at: Date.now(), user, set: set2, folders: folders2 };
   }
-  return attached.set.has(norm$1(absPath)) ? node_path.resolve(absPath) : null;
+  const n = norm$1(absPath);
+  if (attached.set.has(n)) return node_path.resolve(absPath);
+  if (attached.folders) {
+    for (const f of attached.folders) {
+      if (n.startsWith(f + node_path.sep) || n === f) return node_path.resolve(absPath);
+    }
+  }
+  return null;
 }
 function handleMediaProtocol() {
   electron.protocol.handle(MEDIA_SCHEME, (req) => {
@@ -21286,18 +21391,67 @@ function topPosts(workspaceId) {
   ).orderBy(drizzleOrm.desc(scheduledPosts.engagements)).limit(10).all();
 }
 const planHandlers = {
-  "plan.list": ({ workspaceId, from, to }) => getDb().select().from(contentIdeas).where(drizzleOrm.and(byWorkspace(contentIdeas.workspaceId, workspaceId), drizzleOrm.gte(contentIdeas.plannedDate, from), drizzleOrm.lte(contentIdeas.plannedDate, to))).orderBy(drizzleOrm.asc(contentIdeas.plannedDate), drizzleOrm.asc(contentIdeas.createdAt)).all(),
-  "plan.generate": async ({ workspaceId, startDate, days, perDay, formats, useTrends }) => {
+  "plan.list": ({ workspaceId, from, to }) => {
+    const db2 = getDb();
+    const ideas = db2.select().from(contentIdeas).where(drizzleOrm.and(byWorkspace(contentIdeas.workspaceId, workspaceId), drizzleOrm.gte(contentIdeas.plannedDate, from), drizzleOrm.lte(contentIdeas.plannedDate, to))).orderBy(drizzleOrm.asc(contentIdeas.plannedDate), drizzleOrm.asc(contentIdeas.createdAt)).all();
+    const itemIds = ideas.map((i) => i.contentItemId).filter(Boolean);
+    const postMap = new Map();
+    if (itemIds.length) {
+      const posts = db2.select({
+        id: scheduledPosts.id,
+        contentItemId: scheduledPosts.contentItemId,
+        status: scheduledPosts.status,
+        scheduledAt: scheduledPosts.scheduledAt
+      }).from(scheduledPosts).where(drizzleOrm.inArray(scheduledPosts.contentItemId, itemIds)).all();
+      for (const p of posts) postMap.set(p.contentItemId, p);
+    }
+    return ideas.map((i) => {
+      const sp = i.contentItemId ? postMap.get(i.contentItemId) : null;
+      return {
+        ...i,
+        scheduledPostId: sp ? sp.id : null,
+        scheduledPostStatus: sp ? sp.status : null,
+        scheduledAt: sp ? sp.scheduledAt : null
+      };
+    });
+  },
+  "plan.generate": async ({ workspaceId, startDate, days, perDay, formats, useTrends, createDraftPosts }) => {
     const db2 = getDb();
     const ws = workspaceId ? db2.select().from(workspaces).where(drizzleOrm.eq(workspaces.id, workspaceId)).get() : void 0;
     if (workspaceId && !ws) throw notFound("Pocket");
-    const niche = ws ? [ws.name, ws.description, ws.tags.join(" ")].filter(Boolean).join(" · ") : "Đa chủ đề giải trí";
+    const niche = ws ? [ws.name, ws.description, ws.tags.join(" ")].filter(Boolean).join(" · ") : "Đa chủ đề kinh doanh & giải trí";
     const chosen = (formats.length ? formats : CONTENT_FORMATS.map((f) => f.id)).map(formatById);
     const start2 = /* @__PURE__ */ new Date(`${startDate}T00:00:00`);
     const dates = Array.from({ length: days }, (_, i) => isoDay$1(new Date(start2.getTime() + i * 864e5)));
+
+    // 1. Phân tích Page / Kênh hiện tại thuộc Pocket
+    const wsChannels = workspaceId ? db2.select().from(channels).where(drizzleOrm.eq(channels.workspaceId, workspaceId)).all() : [];
+    const channelInfo = wsChannels.length
+      ? wsChannels.map((c) => `- Kênh "${c.name}" [${c.platform.toUpperCase()} - ${c.kind}] (${c.followers || 0} followers, ngách: ${c.nicheTag || ws?.name || "chung"}, trạng thái: ${c.status})`).join("\n")
+      : "Pocket chưa có kênh Fanpage riêng.";
+
+    // 2. Đọc kho ảnh/video sản phẩm trong mediaFolder của Pocket
+    let productMediaFiles = [];
+    if (ws?.mediaFolder && node_fs.existsSync(ws.mediaFolder)) {
+      try {
+        const list = node_fs.readdirSync(ws.mediaFolder);
+        productMediaFiles = list.filter((f) => /\.(jpe?g|png|webp|gif|mp4|mov|m4v)$/i.test(f)).map((f) => ({
+          name: f,
+          fullPath: node_path.join(ws.mediaFolder, f),
+          isVideo: /\.(mp4|mov|m4v)$/i.test(f)
+        }));
+      } catch {}
+    }
+    const productMedia = productMediaFiles.length
+      ? `Kho tư liệu sản phẩm sẵn có (${productMediaFiles.length} file ảnh & video):\n` +
+        productMediaFiles.slice(0, 30).map((f) => `- ${f.name} (${f.isVideo ? "Video" : "Ảnh"})`).join("\n")
+      : "Chưa liên kết thư mục ảnh/video sản phẩm.";
+
     const { ideas, meta: m } = await planContent({
       niche,
       brandVoice: ws?.brandVoice ?? null,
+      channelInfo,
+      productMedia,
       topPosts: topPosts(workspaceId ?? null),
       trends: useTrends ? await trendingSearches() : [],
       formats: chosen.map((f) => ({ id: f.id, label: f.label, guide: f.guide })),
@@ -21307,20 +21461,96 @@ const planHandlers = {
     });
     const allowed = new Set(chosen.map((f) => f.id));
     const valid = ideas.filter((i) => dates.includes(i.date)).slice(0, days * perDay);
+
+    const goldenSlots = (ws?.goldenHours && ws.goldenHours.length)
+      ? ws.goldenHours
+      : [{ start: "11:30", end: "12:00" }, { start: "18:30", end: "19:00" }, { start: "20:00", end: "20:30" }];
+    const activeChannels = wsChannels.filter((c) => c.status === "active");
+    const defaultChannel = activeChannels[0] || wsChannels[0] || null;
+
+    let mediaCursor = 0;
+    let draftCount = 0;
+
     db2.transaction((tx) => {
-      for (const i of valid)
+      const dayIdeaCount = new Map();
+      for (const i of valid) {
+        const ideaId = newId();
+        const fmt = allowed.has(i.format) ? i.format : chosen[0].id;
+        const fmtObj = formatById(fmt);
+        let contentItemId = null;
+
+        if (createDraftPosts !== false) {
+          let attached = [];
+          if (productMediaFiles.length > 0) {
+            if (fmtObj.kind === "video") {
+              const vid = productMediaFiles.find((f) => f.isVideo) || productMediaFiles[mediaCursor % productMediaFiles.length];
+              if (vid) {
+                attached = [vid.fullPath];
+                mediaCursor++;
+              }
+            } else {
+              const photos = productMediaFiles.filter((f) => !f.isVideo);
+              const pool = photos.length ? photos : productMediaFiles;
+              const pickCount = Math.min(3, pool.length);
+              for (let k = 0; k < pickCount; k++) {
+                attached.push(pool[(mediaCursor + k) % pool.length].fullPath);
+              }
+              mediaCursor += pickCount;
+            }
+          }
+
+          const kind = attached.length ? (attached.some((p) => /\.(mp4|mov|m4v)$/i.test(p)) ? "video" : "image") : (fmtObj.kind === "video" ? "video" : "text");
+          const caption = [
+            i.hook ? `🔥 ${i.hook.trim()}` : "",
+            i.description ? i.description.trim() : ""
+          ].filter(Boolean).join("\n\n");
+
+          const item = tx.insert(contentItems).values({
+            id: newId(),
+            workspaceId: workspaceId ?? null,
+            kind,
+            title: i.title.trim().slice(0, 300),
+            caption: caption || null,
+            mediaPaths: attached,
+            status: "draft"
+          }).returning().get();
+
+          contentItemId = item.id;
+          draftCount++;
+
+          if (defaultChannel) {
+            const countOnDay = dayIdeaCount.get(i.date) || 0;
+            dayIdeaCount.set(i.date, countOnDay + 1);
+            const slot = goldenSlots[countOnDay % goldenSlots.length];
+            const [sh, sm] = (slot.start || "12:00").split(":").map(Number);
+            const postDate = new Date(`${i.date}T${String(sh || 12).padStart(2, "0")}:${String(sm || 0).padStart(2, "0")}:00`);
+
+            tx.insert(scheduledPosts).values({
+              id: newId(),
+              contentItemId: item.id,
+              channelId: defaultChannel.id,
+              scheduledAt: postDate,
+              status: "draft",
+              isGoldenHour: true
+            }).run();
+          }
+        }
+
         tx.insert(contentIdeas).values({
-          id: newId(),
+          id: ideaId,
           workspaceId: workspaceId ?? null,
           plannedDate: i.date,
           title: i.title.trim(),
-          format: allowed.has(i.format) ? i.format : chosen[0].id,
+          format: fmt,
           hook: i.hook || null,
           description: i.description || null,
+          contentItemId,
+          status: contentItemId ? "in_progress" : "idea",
           source: "ai"
         }).run();
+      }
     });
-    return { created: valid.length, meta: meta(m) };
+    return { created: valid.length, draftsCreated: draftCount, meta: meta(m) };
   },
   "plan.save": ({ id: id2, ...input }) => {
     const db2 = getDb();

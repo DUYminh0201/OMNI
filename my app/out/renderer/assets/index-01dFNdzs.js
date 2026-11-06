@@ -35310,6 +35310,59 @@ function ContentEditor({
                         " Chọn ảnh / video"
                       ]
                     }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    Button,
+                    {
+                      size: "sm",
+                      variant: "subtle",
+                      disabled: d.mediaPaths.length >= 10,
+                      title: "Lấy ảnh hoặc video từ Thư mục Sản phẩm của Pocket này",
+                      onClick: () => {
+                        const curWs = workspaces?.find((w) => w.id === d.workspaceId);
+                        if (!curWs?.mediaFolder) {
+                          void confirmDialog({
+                            title: "Pocket chưa có Thư mục Media",
+                            message: `Pocket "${curWs?.name || ""}" chưa liên kết thư mục chứa ảnh & video sản phẩm. Bạn có muốn chọn thư mục ngay bây giờ?`,
+                            confirmLabel: "Chọn thư mục"
+                          }).then((ok) => {
+                            if (ok) {
+                              void call("workspaces.pickMediaFolder", { id: d.workspaceId }).then((res) => {
+                                if (res && !res.canceled && res.mediaFolder) {
+                                  toast.success("Đã liên kết thư mục Media cho Pocket!");
+                                  void call("workspaces.listMediaFiles", { folderPath: res.mediaFolder }).then((mf) => {
+                                    if (mf?.files?.length) {
+                                      const added = mf.files.slice(0, 5).map((f) => f.absPath);
+                                      setD((x2) => ({ ...x2, mediaPaths: [...new Set([...x2.mediaPaths, ...added])].slice(0, 10) }));
+                                      toast.success(`Đã thêm ${added.length} file sản phẩm vào bài viết!`);
+                                    }
+                                  });
+                                }
+                              });
+                            }
+                          });
+                          return;
+                        }
+                        void call("workspaces.listMediaFiles", { folderPath: curWs.mediaFolder }).then((mf) => {
+                          if (!mf?.files?.length) {
+                            toast.info("Thư mục của Pocket chưa có file ảnh hoặc video nào.");
+                            return;
+                          }
+                          const unselected = mf.files.filter((f) => !d.mediaPaths.includes(f.absPath));
+                          if (!unselected.length) {
+                            toast.info("Tất cả ảnh/video trong thư mục đã có trong bài viết.");
+                            return;
+                          }
+                          const toAdd = unselected.slice(0, Math.max(1, 10 - d.mediaPaths.length));
+                          setD((x2) => ({ ...x2, mediaPaths: [...x2.mediaPaths, ...toAdd.map((f) => f.absPath)] }));
+                          toast.success(`Đã thêm ${toAdd.length} file từ Thư mục Pocket!`);
+                        }).catch((e) => toast.error(e.message));
+                      },
+                      children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsx(FolderOpen, { size: 13 }),
+                        " Kho Pocket"
+                      ]
+                    }
                   )
                 ] }),
                 d.mediaPaths.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "rounded-lg bg-surface-container-lowest p-space-sm text-label-sm text-outline", children: "Chưa đính kèm file – bài chữ chỉ đăng được lên Fanpage." }) : /* @__PURE__ */ jsxRuntimeExports.jsx("ul", { className: "flex flex-col gap-1", children: d.mediaPaths.map((p2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { className: "flex items-center gap-space-sm rounded-lg bg-surface-container-lowest px-space-sm py-1 text-body-sm", children: [
@@ -35723,7 +35776,7 @@ function ScheduleDialog({
   const past = when != null && when.getTime() < Date.now();
   const isGolden = !!ws?.goldenHours.some((s) => time2 >= s.start && time2 < s.end);
   const error = schedule.error ?? reschedule.error ?? cancel.error ?? publishNow.error;
-  const editable = target?.mode === "new" || target?.mode === "edit" && (target.post.status === "queued" || target.post.status === "failed");
+  const editable = target?.mode === "new" || target?.mode === "edit" && (target.post.status === "queued" || target.post.status === "failed" || target.post.status === "draft");
   const submit = () => {
     if (!target || !when || past || schedule.isPending || reschedule.isPending) return;
     if (target.mode === "new") {
@@ -35769,6 +35822,22 @@ function ScheduleDialog({
             ]
           }
         ),
+        target?.mode === "edit" && target.post.status === "draft" && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          Button,
+          {
+            variant: "primary",
+            onClick: () => {
+              void call("posts.approve", { id: target.post.id }).then(() => {
+                toast.success("Đã duyệt bài đăng thành công! Bài sẽ tự động đăng theo lịch.");
+                onClose();
+              }).catch((e) => toast.error(e.message));
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(Check, { size: 14 }),
+              " Duyệt đăng"
+            ]
+          }
+        ),
         /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { variant: "subtle", onClick: onClose, children: "Đóng" }),
         target?.mode === "edit" && editable && /* @__PURE__ */ jsxRuntimeExports.jsxs(
           Button,
@@ -35808,7 +35877,7 @@ function ScheduleDialog({
             target?.mode === "edit" ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "col-span-2 flex items-center gap-space-sm rounded-lg bg-surface-container-lowest p-space-sm", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(PlatformBadge, { platform: target.post.platform }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "flex-1 truncate text-label-md text-on-surface", children: target.post.channelName }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: target.post.status === "failed" ? "danger" : target.post.status === "published" ? "success" : "warning", children: target.post.status === "failed" ? "Lỗi" : target.post.status === "published" ? "Đã đăng" : target.post.status === "queued" ? "Chờ đăng" : target.post.status })
+              /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: target.post.status === "draft" ? "warning" : target.post.status === "failed" ? "danger" : target.post.status === "published" ? "success" : "neutral", children: target.post.status === "draft" ? "Bản nháp (chờ duyệt)" : target.post.status === "failed" ? "Lỗi" : target.post.status === "published" ? "Đã đăng" : target.post.status === "queued" ? "Chờ đăng" : target.post.status })
             ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(Field, { label: "Nội dung", required: true, className: "col-span-2", hint: queue.length ? `${queue.length} nội dung "Sẵn sàng đăng" trong Kho nội dung` : void 0, children: (id2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Select, { id: id2, value: contentId, onChange: (e) => setContentId(e.target.value), children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "— Chọn nội dung —" }),
@@ -35936,7 +36005,7 @@ function StaggerControl() {
   );
 }
 const INVALIDATES$2 = ["posts.", "content.", "dashboard.", "workspaces."];
-const statusLabel = { queued: "Chờ đăng", publishing: "Đang đăng", published: "Đã đăng", failed: "Lỗi", cancelled: "Đã hủy" };
+const statusLabel = { draft: "Bản nháp (chờ duyệt)", queued: "Chờ đăng", publishing: "Đang đăng", published: "Đã đăng", failed: "Lỗi", cancelled: "Đã hủy" };
 const NO_CONTENT = [];
 function exportCsv(posts, label) {
   const esc = (v2) => `"${v2.replace(/"/g, '""')}"`;
@@ -49731,7 +49800,8 @@ const toDraft = (ws) => ({
   watermarkPath: ws.watermarkPath,
   watermarkPosition: ws.watermarkPosition ?? "br",
   watermarkOpacity: ws.watermarkOpacity,
-  goldenHours: ws.goldenHours
+  goldenHours: ws.goldenHours,
+  mediaFolder: ws.mediaFolder ?? null
 });
 const positionLabel = { tl: "Góc trái trên", tr: "Góc phải trên", bl: "Góc trái dưới", br: "Góc phải dưới", center: "Chính giữa" };
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -49791,7 +49861,8 @@ function RulesPanel({ ws }) {
           watermarkPath: draft.watermarkPath,
           watermarkPosition: draft.watermarkPosition,
           watermarkOpacity: draft.watermarkOpacity,
-          goldenHours: [...draft.goldenHours].sort((a, b2) => a.start.localeCompare(b2.start))
+          goldenHours: [...draft.goldenHours].sort((a, b2) => a.start.localeCompare(b2.start)),
+          mediaFolder: draft.mediaFolder || null
         }
       });
     }
@@ -49837,6 +49908,22 @@ function RulesPanel({ ws }) {
         ] });
       }) })
     ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(Section$1, {
+      icon: FolderOpen,
+      title: "Thư mục Media & Sản phẩm",
+      aside: draft.mediaFolder ? /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: "success", children: "Đã liên kết" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: "neutral", children: "Chưa chọn" }),
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-body-sm text-on-surface-variant", children: "Thư mục chứa ảnh và video sản phẩm trên máy tính của Pocket này. AI sẽ tự động lấy ảnh/video từ thư mục này để lên bài viết và kế hoạch nội dung viral." }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-space-sm rounded-lg border border-outline/20 bg-surface-container-lowest p-space-sm", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "flex-1 min-w-0 font-mono text-code text-on-surface truncate", title: draft.mediaFolder || "Chưa có thư mục", children: draft.mediaFolder || "Chưa chọn thư mục media" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { size: "sm", variant: "subtle", onClick: () => void call("workspaces.pickMediaFolder", { id: ws.id }).then((r) => r && !r.canceled && r.mediaFolder && set("mediaFolder", r.mediaFolder)), children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(FolderOpen, { size: 14 }),
+            draft.mediaFolder ? " Đổi thư mục" : " Chọn thư mục"
+          ] }),
+          draft.mediaFolder && /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { size: "sm", variant: "subtle", "aria-label": "Gỡ thư mục", onClick: () => set("mediaFolder", null), children: /* @__PURE__ */ jsxRuntimeExports.jsx(Trash, { size: 14 }) })
+        ] })
+      ]
+    }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
       Section$1,
       {
@@ -51552,6 +51639,7 @@ function IdeaDialog({
   onClose
 }) {
   const save = useApiMutation("plan.save", INV$4);
+  const approvePost = useApiMutation("posts.approve", ["plan.", "posts.", "content."]);
   const idea = target && "id" in target ? target : null;
   const [f2, setF] = reactExports.useState({ plannedDate: "", title: "", format: "free", hook: "", description: "" });
   const [typing, setTyping] = reactExports.useState(false);
@@ -51646,6 +51734,7 @@ function PlanPage() {
   const [customFormats, setCustomFormats] = reactExports.useState(loadCustom);
   const [addingFormat, setAddingFormat] = reactExports.useState(false);
   const [useTrends, setUseTrends] = reactExports.useState(true);
+  const [autoDraft, setAutoDraft] = reactExports.useState(true);
   const [editing, setEditing] = reactExports.useState(null);
   const [selected, setSelected] = reactExports.useState(/* @__PURE__ */ new Set());
   reactExports.useEffect(() => {
@@ -51769,9 +51858,13 @@ function PlanPage() {
             n2,
             " bài / ngày"
           ] }, n2)) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-1 text-body-sm text-on-surface", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-1 text-body-sm text-on-surface select-none", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "checkbox", checked: useTrends, onChange: (e) => setUseTrends(e.target.checked), className: "h-4 w-4 accent-primary-container" }),
-            "Tham khảo xu hướng tìm kiếm (Google Trends VN)"
+            "Tham khảo Google Trends VN"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "flex items-center gap-1 text-body-sm text-on-surface select-none", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "checkbox", checked: autoDraft, onChange: (e) => setAutoDraft(e.target.checked), className: "h-4 w-4 accent-primary-container" }),
+            "Lên lịch bài nháp chờ duyệt"
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs(
             Button,
@@ -51780,8 +51873,8 @@ function PlanPage() {
               className: "ml-auto",
               disabled: generate.isPending || formats.length === 0,
               onClick: () => generate.mutate(
-                { workspaceId, startDate: from, days, perDay, formats, useTrends },
-                { onSuccess: (r2) => toast.success(`AI đã thêm ${r2.created} ý tưởng vào kế hoạch`), onError: (e) => toast.error(e.message) }
+                { workspaceId, startDate: from, days, perDay, formats, useTrends, createDraftPosts: autoDraft },
+                { onSuccess: (r2) => toast.success(`AI đã thêm ${r2.created} ý tưởng${r2.draftsCreated ? ` và tạo ${r2.draftsCreated} bài nháp lên lịch` : ""} vào kế hoạch`), onError: (e) => toast.error(e.message) }
               ),
               children: [
                 generate.isPending ? /* @__PURE__ */ jsxRuntimeExports.jsx(LoaderCircle, { size: 14, className: "animate-spin" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Sparkles, { size: 14 }),
@@ -51845,7 +51938,9 @@ function PlanPage() {
                     }
                   ),
                   /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: "secondary", children: fmt2.label }),
-                  i.status !== "idea" && /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: st.tone, children: st.label })
+                  i.scheduledPostStatus === "draft" && /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: "warning", children: "Bản nháp - Chờ duyệt" }),
+                  i.scheduledPostStatus === "queued" && /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: "success", children: "Đã duyệt lên lịch" }),
+                  i.status !== "idea" && !i.scheduledPostStatus && /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { tone: st.tone, children: st.label })
                 ] }),
                 /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-label-md text-on-surface", children: i.title }),
                 i.hook && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-label-sm italic text-on-surface-variant", children: [
@@ -51898,6 +51993,20 @@ function PlanPage() {
                     }
                   ),
                   /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { size: "sm", variant: "subtle", "aria-label": "Sửa", onClick: () => setEditing(i), children: /* @__PURE__ */ jsxRuntimeExports.jsx(Pencil, { size: 12 }) }),
+                  i.scheduledPostStatus === "draft" && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    Button,
+                    {
+                      size: "sm",
+                      variant: "primary",
+                      disabled: approvePost.isPending,
+                      title: "Duyệt xuất bản bài đăng này theo lịch",
+                      onClick: () => approvePost.mutate({ id: i.scheduledPostId }, { onSuccess: () => toast.success(`Đã duyệt bài "${i.title.slice(0, 30)}..."! Bài sẽ tự động đăng theo lịch.`), onError: (e) => toast.error(e.message) }),
+                      children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsx(Check, { size: 12 }),
+                        " Duyệt đăng"
+                      ]
+                    }
+                  ),
                   i.status !== "done" && /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { size: "sm", variant: "subtle", title: "Đánh dấu đã xong", onClick: () => save.mutate({ id: i.id, title: i.title, format: i.format, status: "done" }), children: "✓" }),
                   /* @__PURE__ */ jsxRuntimeExports.jsx(
                     Button,
