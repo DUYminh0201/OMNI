@@ -6719,7 +6719,7 @@ const flowImageCacheBase = (prompt, aspect, refs = []) => node_path.join(cacheDi
 const IMG_EXT = [".jpg", ".png", ".webp"];
 const flowImageCached = (prompt, aspect, refs = []) => IMG_EXT.map((e) => flowImageCacheBase(prompt, aspect, refs) + e).find((f) => node_fs.existsSync(f)) ?? null;
 const KEEP_CHARACTERS = "Keep the characters exactly as in the attached reference images (face, hair, outfit).";
-async function flowImage(prompt, signal, aspect = "9:16", refs = [], refsNote = KEEP_CHARACTERS) {
+async function flowImage(prompt, signal, aspect = "9:16", refs = [], refsNote = KEEP_CHARACTERS, onStatus) {
   const hit = flowImageCached(prompt, aspect, refs);
   if (hit) return { file: hit, kind: "image", source: "nano_banana", credit: "AI: Nano Banana (Google Flow)" };
   const text = `${prompt}. ${framing$1(aspect)} photo, photorealistic, no text, no watermark.${refs.length && refsNote ? ` ${refsNote}` : ""}`;
@@ -6729,6 +6729,7 @@ async function flowImage(prompt, signal, aspect = "9:16", refs = [], refsNote = 
     refs: refs.slice(0, 3),
     destBase: flowImageCacheBase(prompt, aspect, refs),
     signal,
+    onStatus,
     attemptTimeoutMs: 1e5
   });
   return { file: file2, kind: "image", source: "nano_banana", credit: "AI: Nano Banana (Google Flow)" };
@@ -6904,8 +6905,8 @@ function imageEngines() {
   const order = pref === "fal" ? ["fal", "google_image"] : ["google_image", "fal"];
   return [...flowImagesReady() ? ["flow"] : [], ...order.filter((p) => isReady(p))];
 }
-function imageBy(eng, prompt, workspaceId, signal, aspect = "9:16", refs = [], refsNote) {
-  return eng === "flow" ? flowImage(prompt, signal, aspect, refs, refsNote) : eng === "google_image" ? googleImage(prompt, workspaceId, signal, aspect, refs, refsNote) : falImage(prompt, workspaceId, signal, aspect);
+function imageBy(eng, prompt, workspaceId, signal, aspect = "9:16", refs = [], refsNote, onStatus) {
+  return eng === "flow" ? flowImage(prompt, signal, aspect, refs, refsNote, onStatus) : eng === "google_image" ? googleImage(prompt, workspaceId, signal, aspect, refs, refsNote) : falImage(prompt, workspaceId, signal, aspect);
 }
 const veoDuration = (sec) => sec <= 4 ? 4 : sec <= 6 ? 6 : 8;
 async function veoClip(prompt, sceneSec, workspaceId, signal, onWait, aspect = "9:16", refs = [], frames = {}, destOverride) {
@@ -9325,7 +9326,7 @@ const fileKey = (f) => `${f.split(/[\\/]/).pop()}:${node_fs.existsSync(f) ? node
 const itemText = (x) => `${fashionKindEn(x.kind)}${x.name ? ` "${x.name}"` : ""}`;
 const tryOnImageEngine = () => {
   const engs = imageEngines();
-  return engs.includes("google_image") ? "google_image" : engs.includes("flow") ? "flow" : null;
+  return engs.includes("flow") ? "flow" : engs.includes("google_image") ? "google_image" : null;
 };
 const kolorsGarments = (items) => items.filter((x) => GARMENT_ORDER.includes(x.kind)).sort((a, b) => GARMENT_ORDER.indexOf(a.kind) - GARMENT_ORDER.indexOf(b.kind));
 function tryOnIssue(setup) {
@@ -9388,6 +9389,24 @@ async function fashionKeyframe(o) {
   const scene = `${o.prompt.trim().replace(/\.$/, "")}. Fashion lookbook photo, the full outfit clearly visible, natural flattering light.`;
   const nano = tryOnImageEngine();
   let file2;
+  const generateTryOn = async (text, refs, note) => {
+    const candidates = [];
+    if (nano) candidates.push(nano);
+    for (const e of imageEngines().filter((e2) => e2 === "flow" || e2 === "google_image")) {
+      if (!candidates.includes(e)) candidates.push(e);
+    }
+    let lastErr = null;
+    for (const eng of candidates) {
+      try {
+        return (await imageBy(eng, text, o.workspaceId, o.signal, o.aspect, refs, note, o.onStatus)).file;
+      } catch (err) {
+        lastErr = err;
+        if (o.signal?.aborted) throw err;
+        console.warn(`[fashionKeyframe] Lỗi khi tạo ảnh qua ${eng}:`, err?.message || err);
+      }
+    }
+    throw lastErr;
+  };
   if (o.setup.tryOn === "kolors") {
     const garments = kolorsGarments(items);
     const extras = items.filter((x) => !garments.includes(x));
@@ -9396,13 +9415,13 @@ async function fashionKeyframe(o) {
       o.onStatus?.("Đặt người mẫu vào bối cảnh của cảnh…");
       const refs = [dressed, ...extras.length ? [await outfitBoard(extras, o.signal)] : []];
       const text = `${scene}${extras.length ? ` The model also wears: ${extras.map(itemText).join(", ")}.` : ""}`;
-      file2 = (await imageBy(nano, text, o.workspaceId, o.signal, o.aspect, refs, DRESSED_NOTE)).file;
+      file2 = await generateTryOn(text, refs, DRESSED_NOTE);
     } else file2 = dressed;
   } else {
     o.onStatus?.("Nano Banana đang tạo ảnh người mẫu mặc thử…");
     const board = await outfitBoard(items, o.signal);
     const text = `${scene} The model wears: ${items.map(itemText).join(", ")}.`;
-    file2 = (await imageBy(nano, text, o.workspaceId, o.signal, o.aspect, [model, board], NANO_NOTE)).file;
+    file2 = await generateTryOn(text, [model, board], NANO_NOTE);
   }
   const ext = file2.match(/\.(png|jpe?g|webp)$/i)?.[0] ?? ".jpg";
   const name = `tryon-${hashOf(fileKey(file2))}${ext}`;
