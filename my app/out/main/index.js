@@ -423,7 +423,7 @@ const TTS_CHUNK_CHARS = {
 };
 function splitLong(s, max) {
   if (s.length <= max) return [s];
-  for (const re of [/(?<=[.!?…。]["'”’)\]]*)\s+/u, /(?<=[,;:–—])\s+/u, /\s+/u]) {
+  for (const re of [/(?<=[.!?…。។៕]["'”’)\]]*)\s+/u, /(?<=[,;:–—])\s+/u, /\s+/u]) {
     const parts = s.split(re).filter(Boolean);
     if (parts.length < 2) continue;
     const out2 = [];
@@ -3257,7 +3257,9 @@ deepseek: {
     priority: 2,
     models: [
       { id: "vi-VN-HoaiMyNeural", label: "HoaiMy (Nữ)" },
-      { id: "vi-VN-NamMinhNeural", label: "NamMinh (Nam)" }
+      { id: "vi-VN-NamMinhNeural", label: "NamMinh (Nam)" },
+      { id: "km-KH-SreymomNeural", label: "Sreymom (Nữ - Khmer)" },
+      { id: "km-KH-PisethNeural", label: "Piseth (Nam - Khmer)" }
     ]
   },
   local_tts: {
@@ -10187,7 +10189,9 @@ const localTtsHandlers = {
 };
 const EDGE_VOICES$1 = [
   { id: "vi-VN-HoaiMyNeural", label: "HoaiMy (Nữ miền Bắc)" },
-  { id: "vi-VN-NamMinhNeural", label: "NamMinh (Nam miền Bắc)" }
+  { id: "vi-VN-NamMinhNeural", label: "NamMinh (Nam miền Bắc)" },
+  { id: "km-KH-SreymomNeural", label: "Sreymom (Nữ - Tiếng Khmer / Campuchia)" },
+  { id: "km-KH-PisethNeural", label: "Piseth (Nam - Tiếng Khmer / Campuchia)" }
 ];
 const OPENAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"].map((v) => ({ id: v, label: v }));
 const GOOGLE_TTS_VOICES = [
@@ -10289,9 +10293,14 @@ async function edgeTtsOnce(text, voice, dir, signal) {
       giveUp
     );
     let words = null;
-    if (metadataFilePath) {
-      const meta2 = JSON.parse(node_fs.readFileSync(metadataFilePath, "utf8"));
-      words = (meta2.Metadata ?? []).filter((m) => m.Type === "WordBoundary").map((m) => ({ text: m.Data.text.Text, start: m.Data.Offset / 1e7, end: (m.Data.Offset + m.Data.Duration) / 1e7 }));
+    if (metadataFilePath && node_fs.existsSync(metadataFilePath)) {
+      try {
+        const raw = node_fs.readFileSync(metadataFilePath, "utf8").trim();
+        if (raw) {
+          const meta2 = JSON.parse(raw);
+          words = (meta2.Metadata ?? []).filter((m) => m.Type === "WordBoundary").map((m) => ({ text: m.Data.text.Text, start: m.Data.Offset / 1e7, end: (m.Data.Offset + m.Data.Duration) / 1e7 }));
+        }
+      } catch {}
     }
     return { file: audioFilePath, durationSec: await probeDuration(audioFilePath), words: words?.length ? words : null, provider: "edge_tts" };
   } finally {
@@ -10426,20 +10435,32 @@ async function synthesize(opts) {
       );
     case "local_tts":
       return localTts(opts.text, opts.voiceId, opts.dir, opts.signal);
-    default:
-      return edgeTts(opts.text, EDGE_VOICES$1.some((v) => v.id === opts.voiceId) ? opts.voiceId : EDGE_VOICES$1[0].id, opts.dir, opts.signal);
+    default: {
+      let chosenVoice = EDGE_VOICES$1.some((v) => v.id === opts.voiceId) ? opts.voiceId : EDGE_VOICES$1[0].id;
+      if (/[\u1780-\u17FF]/.test(opts.text) && !chosenVoice.startsWith("km-KH")) {
+        chosenVoice = chosenVoice.includes("Nam") ? "km-KH-PisethNeural" : "km-KH-SreymomNeural";
+      }
+      return edgeTts(opts.text, chosenVoice, opts.dir, opts.signal);
+    }
   }
 }
 const PREVIEW_TEXT = "Xin chào! Đây là giọng đọc mẫu cho video của bạn. Bạn thấy giọng này thế nào?";
+const previewTextForVoice = (voiceId) => {
+  if (voiceId && (voiceId.startsWith("km-KH") || voiceId.toLowerCase().includes("khmer"))) {
+    return "សួស្តី! នេះជាសំឡេងគំរូសម្រាប់វីដេអូរបស់អ្នក។ តើអ្នកយល់យ៉ាងណាចំពោះសំឡេងនេះ?";
+  }
+  return PREVIEW_TEXT;
+};
 async function previewVoice(provider, voiceId, workspaceId, root2) {
   const model = providerRow(provider)?.defaultModel ?? "";
-  const key2 = node_crypto.createHash("sha1").update([provider, model, voiceId ?? "", PREVIEW_TEXT].join("|")).digest("hex").slice(0, 16);
+  const sampleText = previewTextForVoice(voiceId);
+  const key2 = node_crypto.createHash("sha1").update([provider, model, voiceId ?? "", sampleText].join("|")).digest("hex").slice(0, 16);
   const rel2 = `voice-samples/${key2}`;
   const dir = node_path.join(root2, rel2);
   const cached = node_fs.existsSync(dir) ? node_fs.readdirSync(dir).find((f) => f.endsWith(".mp3")) : void 0;
   if (cached) return `${rel2}/${cached}`;
   try {
-    const out = await synthesize({ provider, voiceId, text: PREVIEW_TEXT, dir, workspaceId, signal: AbortSignal.timeout(6e4) });
+    const out = await synthesize({ provider, voiceId, text: sampleText, dir, workspaceId, signal: AbortSignal.timeout(6e4) });
     return `${rel2}/${node_path.basename(out.file)}`;
   } catch (e) {
     node_fs.rmSync(dir, { recursive: true, force: true });

@@ -38904,7 +38904,9 @@ deepseek: {
     priority: 2,
     models: [
       { id: "vi-VN-HoaiMyNeural", label: "HoaiMy (Nữ)" },
-      { id: "vi-VN-NamMinhNeural", label: "NamMinh (Nam)" }
+      { id: "vi-VN-NamMinhNeural", label: "NamMinh (Nam)" },
+      { id: "km-KH-SreymomNeural", label: "Sreymom (Nữ - Khmer)" },
+      { id: "km-KH-PisethNeural", label: "Piseth (Nam - Khmer)" }
     ]
   },
   local_tts: {
