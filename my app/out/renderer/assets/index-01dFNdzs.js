@@ -39489,7 +39489,7 @@ function ProviderRow({ provider, compact: compact2, note, owner }) {
   const info = providerInfo(provider.provider);
   const keyless = !!info.keyless;
   const shared = !!info.keyFrom;
-  const ownKey = shared && provider.hasKey;
+  const ownKey = shared && (provider.hasOwnKey ?? provider.hasKey);
   const [override, setOverride] = reactExports.useState(ownKey);
   const showForm = !keyless && (!shared || override || ownKey);
   const usable = keyless || provider.hasKey || shared && !!owner?.hasKey;

@@ -16068,6 +16068,7 @@ function openSession(user) {
     openDatabase();
     if (seedIfEmpty()) console.info("[db] đã nạp dữ liệu mẫu (OMNI_SEED=1)");
     ensureProviders();
+    syncAllAiSecretsToMktFlow();
     console.info(`[auth] đăng nhập ${user.id.slice(0, 8)} · ${dbFilePath()}`);
   } catch (err) {
     closeDatabase();
@@ -17328,50 +17329,118 @@ function syncAllAiSecretsToMktFlow() {
   try {
     const electronMod = require("electron");
     const userDataPath = (electronMod && electronMod.app) ? electronMod.app.getPath("userData") : null;
-    if (!userDataPath) return;
-    const mktDbDir = node_path.join(userDataPath, "db");
-    if (!node_fs.existsSync(mktDbDir)) {
-      node_fs.mkdirSync(mktDbDir, { recursive: true });
+    const candidateDirs = [
+      userDataPath ? node_path.join(userDataPath, "db") : null,
+      process.env.APPDATA ? node_path.join(process.env.APPDATA, "marketing-flow", "db") : null,
+      process.env.APPDATA ? node_path.join(process.env.APPDATA, "omnira-studio", "db") : null,
+      process.env.APPDATA ? node_path.join(process.env.APPDATA, "Omnira Studio", "db") : null,
+      "C:\\Users\\nminh\\Desktop\\vibe - code\\MKT FLOW\\runtime\\database"
+    ].filter(Boolean);
+
+    const provs = ["gemini", "nvidia", "openai", "deepseek", "anthropic", "fal", "elevenlabs"];
+    const allKeysByProvider = {};
+    for (const p of provs) allKeysByProvider[p] = new Set();
+
+    const candidateFiles = [];
+    for (const dir of candidateDirs) {
+      const p = node_path.join(dir, "keys.json");
+      candidateFiles.push(p);
+      if (node_fs.existsSync(p)) {
+        try {
+          const content = JSON.parse(node_fs.readFileSync(p, "utf8"));
+          for (const prov of provs) {
+            const list = Array.isArray(content?.[prov]) ? content[prov] : [];
+            for (const item of list) {
+              const k = typeof item === "string" ? item.trim() : item?.api_key?.trim();
+              if (k && item?.status !== "BLOCKED" && item?.status !== "INVALID") {
+                allKeysByProvider[prov].add(k);
+              }
+            }
+          }
+        } catch (_) {}
+      }
     }
-    const mktKeysPath = node_path.join(mktDbDir, "keys.json");
-    let mktKeys = { gemini: [], nvidia: [], openai: [] };
-    if (node_fs.existsSync(mktKeysPath)) {
-      try {
-        mktKeys = JSON.parse(node_fs.readFileSync(mktKeysPath, "utf8")) || mktKeys;
-      } catch (_) {}
-    }
-    const provs = ["gemini", "nvidia", "openai"];
-    let changed = false;
-    for (const pName of provs) {
-      const row = providerRow(pName);
-      if (!row) continue;
-      const secret = readSecret("ai_provider", row.id, "api_key");
-      if (!secret) continue;
-      const keys = parseKeyPool(secret);
-      if (!mktKeys[pName]) mktKeys[pName] = [];
-      keys.forEach(k => {
-        let existing = mktKeys[pName].find(entry => entry.api_key === k);
-        if (!existing) {
-          mktKeys[pName].push({
-            id: newId(),
-            api_key: k,
-            status: "ACTIVE",
-            fail_count: 0,
-            reset_at: null,
-            added_at: Date.now()
-          });
-          changed = true;
-        } else if (existing.status !== "ACTIVE" && existing.status !== "BLOCKED") {
-          existing.status = "ACTIVE";
-          existing.fail_count = 0;
-          existing.reset_at = null;
-          changed = true;
+
+    const db2 = getDb();
+    for (const prov of provs) {
+      const row = providerRow(prov);
+      if (row) {
+        const secret = readSecret("ai_provider", row.id, "api_key");
+        if (secret) {
+          const keys = parseKeyPool(secret);
+          for (const k of keys) if (k.trim()) allKeysByProvider[prov].add(k.trim());
         }
-      });
+      }
     }
-    if (changed) {
-      node_fs.writeFileSync(mktKeysPath, JSON.stringify(mktKeys, null, 2), "utf8");
-      console.info("[ai] Đã đồng bộ an toàn secret sang userData keys.json, tổng gemini keys:", mktKeys["gemini"]?.length || 0);
+
+    for (const prov of provs) {
+      const row = providerRow(prov);
+      if (!row) continue;
+      const keyList = Array.from(allKeysByProvider[prov]);
+      if (keyList.length === 0) continue;
+      const currentSecret = readSecret("ai_provider", row.id, "api_key");
+      const currentKeys = currentSecret ? parseKeyPool(currentSecret) : [];
+      const dbNeedsUpdate = !currentSecret || keyList.some((k) => !currentKeys.includes(k));
+      if (dbNeedsUpdate) {
+        const mergedKeys = Array.from(new Set([...currentKeys, ...keyList]));
+        putSecret({
+          kind: "api_key",
+          ownerType: "ai_provider",
+          ownerId: row.id,
+          value: mergedKeys.join("\n")
+        });
+        db2.update(aiProviders).set({ status: "valid", updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(aiProviders.id, row.id)).run();
+        console.info(`[ai] Đã đồng bộ ${mergedKeys.length} keys cho ${prov} vào database`);
+      }
+    }
+
+    for (const filePath of candidateFiles) {
+      try {
+        const dir = node_path.dirname(filePath);
+        if (!node_fs.existsSync(dir)) {
+          if (userDataPath && dir.startsWith(userDataPath)) {
+            node_fs.mkdirSync(dir, { recursive: true });
+          } else {
+            continue;
+          }
+        }
+        let fileContent = {};
+        if (node_fs.existsSync(filePath)) {
+          try {
+            fileContent = JSON.parse(node_fs.readFileSync(filePath, "utf8")) || {};
+          } catch (_) {}
+        }
+        let fileChanged = false;
+        for (const prov of provs) {
+          const keyList = Array.from(allKeysByProvider[prov]);
+          if (!fileContent[prov]) fileContent[prov] = [];
+          for (const k of keyList) {
+            let existing = fileContent[prov].find((entry) => entry.api_key === k);
+            if (!existing) {
+              fileContent[prov].push({
+                id: newId(),
+                api_key: k,
+                status: "ACTIVE",
+                fail_count: 0,
+                reset_at: null,
+                added_at: Date.now()
+              });
+              fileChanged = true;
+            } else if (existing.status !== "ACTIVE" && existing.status !== "BLOCKED") {
+              existing.status = "ACTIVE";
+              existing.fail_count = 0;
+              existing.reset_at = null;
+              fileChanged = true;
+            }
+          }
+        }
+        if (fileChanged) {
+          node_fs.writeFileSync(filePath, JSON.stringify(fileContent, null, 2), "utf8");
+          console.info("[ai] Đã đồng bộ keys vào file:", filePath);
+        }
+      } catch (err) {
+        console.warn("[ai] Không thể ghi keys vào", filePath, err.message);
+      }
     }
   } catch (e) {
     console.warn("[ai] syncAllAiSecretsToMktFlow error:", e);
@@ -17383,10 +17452,20 @@ const settingsHandlers = {
     syncAllAiSecretsToMktFlow();
     const db2 = getDb();
     const keys = db2.select({ ownerId: secrets.ownerId, preview: secrets.preview }).from(secrets).where(drizzleOrm.and(drizzleOrm.eq(secrets.ownerType, "ai_provider"), drizzleOrm.eq(secrets.kind, "api_key"))).all();
-    return db2.select().from(aiProviders).orderBy(drizzleOrm.asc(aiProviders.category), drizzleOrm.asc(aiProviders.priority)).all().filter((p) => !providerInfo(p.provider).hidden).map((p) => {
-      const key2 = keys.find((k) => k.ownerId === p.id);
+    const allProviders = db2.select().from(aiProviders).orderBy(drizzleOrm.asc(aiProviders.category), drizzleOrm.asc(aiProviders.priority)).all();
+    return allProviders.filter((p) => !providerInfo(p.provider).hidden).map((p) => {
+      const ownKey = keys.find((k) => k.ownerId === p.id);
+      const owner = keyOwner(p);
+      const ownerKey = owner && owner.id !== p.id ? keys.find((k) => k.ownerId === owner.id) : null;
+      const key2 = ownKey ?? ownerKey;
       const live2 = db2.select().from(settings).where(drizzleOrm.eq(settings.key, `ai.models.${p.id}`)).get();
-      return { ...p, hasKey: key2 != null, keyPreview: key2?.preview ?? null, liveModels: Array.isArray(live2?.value) ? live2.value : [] };
+      return {
+        ...p,
+        hasKey: key2 != null,
+        hasOwnKey: ownKey != null,
+        keyPreview: ownKey ? ownKey.preview : (ownerKey ? (ownerKey.preview ?? `Dùng chung ${owner.label}`) : null),
+        liveModels: Array.isArray(live2?.value) ? live2.value : []
+      };
     });
   },
   "ai.updateProvider": ({ id: id2, patch: patch2 }) => {
@@ -17403,31 +17482,7 @@ const settingsHandlers = {
     const normalizedKey = parsedKeys.length > 0 ? parsedKeys.join("\n") : key2.trim();
     putSecret({ kind: "api_key", ownerType: "ai_provider", ownerId: providerId, value: normalizedKey });
     db2.update(aiProviders).set({ status: "untested", lastTestedAt: null, lastError: null, updatedAt: /* @__PURE__ */ new Date() }).where(drizzleOrm.eq(aiProviders.id, providerId)).run();
-        if (provider.provider === "nvidia" || provider.provider === "gemini" || provider.provider === "openai") {
-      try {
-        const mktKeysPath = "C:\\Users\\nminh\\Desktop\\vibe - code\\MKT FLOW\\runtime\\database\\keys.json";
-        if (node_fs.existsSync(mktKeysPath)) {
-          const mktKeys = JSON.parse(node_fs.readFileSync(mktKeysPath, "utf8"));
-          if (!mktKeys[provider.provider]) mktKeys[provider.provider] = [];
-          parsedKeys.forEach(k => {
-            if (!mktKeys[provider.provider].some(entry => entry.api_key === k)) {
-              mktKeys[provider.provider].push({
-                id: newId(),
-                api_key: k,
-                status: "ACTIVE",
-                fail_count: 0,
-                reset_at: null,
-                added_at: Date.now()
-              });
-            }
-          });
-          node_fs.writeFileSync(mktKeysPath, JSON.stringify(mktKeys, null, 2), "utf8");
-          console.info("[ai] Synced keys to MKT FLOW for provider:", provider.provider);
-        }
-      } catch (err) {
-        console.warn("[ai] Failed to sync keys to MKT FLOW:", err);
-      }
-    }
+    syncAllAiSecretsToMktFlow();
     return testWithDependents(providerId);
   },
   "ai.testModel": ({ id: id2 }) => testModel(id2),
@@ -19914,7 +19969,7 @@ const aiHandlers = {
         provider: p.provider,
         model: p.defaultModel,
         enabled: p.enabled,
-        hasKey: readSecret("ai_provider", p.id, "api_key") != null
+        hasKey: readSecret("ai_provider", keyOwner(p).id, "api_key") != null
       }))
     };
   },
