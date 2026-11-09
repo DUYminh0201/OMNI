@@ -3245,8 +3245,8 @@ deepseek: {
     keyFrom: "gemini",
     priority: 1,
     models: [
-      { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS" },
-      { id: "gemini-2.5-pro-preview-tts", label: "Gemini 2.5 Pro TTS (hay hơn, đắt hơn)" }
+      { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS (Nhanh, miễn phí - Khuyên dùng)" },
+      { id: "gemini-2.5-pro-preview-tts", label: "Gemini 2.5 Pro TTS (Cần bật thanh toán Google)" }
     ]
   },
   edge_tts: {
@@ -10361,39 +10361,80 @@ async function openaiTts(text, voice, model, dir, workspaceId, signal) {
   return { file: file2, durationSec: await probeDuration(file2), words: null, provider: "openai_tts" };
 }
 async function googleTts(text, voice, model, dir, workspaceId, signal) {
-  const { key: key2, baseUrl, row } = requireKey("google_tts");
+  const req = requireKey("google_tts");
+  const { baseUrl, row, pool, owner } = req;
   assertBudget(workspaceId);
   const base = (baseUrl ?? GOOGLE_BASE).replace(/\/$/, "");
-  const res = await fetch(`${base}/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "x-goog-api-key": key2, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text }] }],
-      generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }
-    }),
-    // Hủy render hoặc quá 120s đều dừng request
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12e4)]) : AbortSignal.timeout(12e4)
-  });
-  if (!res.ok)
-    throw await providerError("Google Gemini TTS", res, {
-      400: "yêu cầu không hợp lệ (model hoặc giọng không hỗ trợ)",
-      403: "key không có quyền hoặc chưa bật Gemini API",
-      404: "không tìm thấy model TTS – bấm Kiểm tra kết nối để cập nhật danh sách model",
-      429: "vượt hạn mức – key miễn phí giới hạn rất thấp, cần bật thanh toán trong Google AI Studio"
-    });
-  const audio = findInlineData(await res.json(), "audio");
-  if (!audio) throw new AiError("invalid_output", "Gemini TTS không trả về âm thanh (có thể bị chặn bởi bộ lọc an toàn)");
-  const rate = Number(audio.mime.match(/rate=(\d+)/)?.[1] ?? 24e3);
-  const pcm = node_path.join(dir, "audio.pcm");
-  const file2 = node_path.join(dir, "audio.mp3");
-  node_fs.writeFileSync(pcm, Buffer.from(audio.data, "base64"));
-  try {
-    await runFfmpeg(["-f", "s16le", "-ar", String(rate), "-ac", "1", "-i", pcm, "-c:a", "libmp3lame", "-b:a", "128k", file2], { signal });
-  } finally {
-    node_fs.rmSync(pcm, { force: true });
+
+  const keysToTry = pool && pool.keys.length > 0 ? pool.keys : [req.key];
+  const maxAttempts = Math.min(keysToTry.length, 5);
+  let currentModel = model || "gemini-2.5-flash-preview-tts";
+  let lastErr = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const currentKey = pickCurrentKey(pool) || keysToTry[attempt % keysToTry.length];
+    try {
+      const res = await fetch(`${base}/models/${encodeURIComponent(currentModel)}:generateContent`, {
+        method: "POST",
+        headers: { "x-goog-api-key": currentKey, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+          }
+        }),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(12e4)]) : AbortSignal.timeout(12e4)
+      });
+
+      if (!res.ok) {
+        // Nếu model Pro bị 429 do gói Free không có quota Pro preview TTS, tự động chuyển sang Flash TTS miễn phí
+        if (res.status === 429 && currentModel.includes("-pro-")) {
+          console.warn(`[ai-tts] Model ${currentModel} bị 429, tự động chuyển sang gemini-2.5-flash-preview-tts`);
+          currentModel = "gemini-2.5-flash-preview-tts";
+          continue;
+        }
+
+        if (res.status === 429 || res.status === 503) {
+          if (owner) markKeyExhausted(owner.id, currentKey, `HTTP ${res.status}`);
+          if (attempt < maxAttempts - 1) {
+            console.warn(`[ai-tts] Key ${currentKey.slice(0, 6)}... bị HTTP ${res.status}, đổi sang key tiếp theo (${attempt + 2}/${maxAttempts})`);
+            continue;
+          }
+        }
+
+        throw await providerError("Google Gemini TTS", res, {
+          400: "yêu cầu không hợp lệ (model hoặc giọng không hỗ trợ)",
+          403: "key không có quyền hoặc chưa bật Gemini API",
+          404: "không tìm thấy model TTS – bấm Kiểm tra kết nối để cập nhật danh sách model",
+          429: "vượt hạn mức – key miễn phí giới hạn rất thấp, cần bật thanh toán trong Google AI Studio"
+        });
+      }
+
+      const audio = findInlineData(await res.json(), "audio");
+      if (!audio) throw new AiError("invalid_output", "Gemini TTS không trả về âm thanh (có thể bị chặn bởi bộ lọc an toàn)");
+      const rate = Number(audio.mime.match(/rate=(\d+)/)?.[1] ?? 24e3);
+      const pcm = node_path.join(dir, "audio.pcm");
+      const file2 = node_path.join(dir, "audio.mp3");
+      node_fs.writeFileSync(pcm, Buffer.from(audio.data, "base64"));
+      try {
+        await runFfmpeg(["-f", "s16le", "-ar", String(rate), "-ac", "1", "-i", pcm, "-c:a", "libmp3lame", "-b:a", "128k", file2], { signal });
+      } finally {
+        node_fs.rmSync(pcm, { force: true });
+      }
+      recordUsage(row.id, workspaceId, currentModel, text.length);
+      return { file: file2, durationSec: await probeDuration(file2), words: null, provider: "google_tts" };
+    } catch (err) {
+      lastErr = err;
+      if (err instanceof AiError && err.kind === "abort") throw err;
+      if (attempt < maxAttempts - 1 && (err?.message?.includes("429") || err?.message?.includes("quota"))) {
+        if (owner) markKeyExhausted(owner.id, currentKey, err.message);
+        continue;
+      }
+      throw err;
+    }
   }
-  recordUsage(row.id, workspaceId, model, text.length);
-  return { file: file2, durationSec: await probeDuration(file2), words: null, provider: "google_tts" };
+  if (lastErr) throw lastErr;
 }
 async function localTts(text, voiceId, dir, signal) {
   const wav = node_path.join(dir, "audio.wav");

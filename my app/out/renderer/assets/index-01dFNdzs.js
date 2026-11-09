@@ -38892,8 +38892,8 @@ deepseek: {
     keyFrom: "gemini",
     priority: 1,
     models: [
-      { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS" },
-      { id: "gemini-2.5-pro-preview-tts", label: "Gemini 2.5 Pro TTS (hay hơn, đắt hơn)" }
+      { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS (Nhanh, miễn phí - Khuyên dùng)" },
+      { id: "gemini-2.5-pro-preview-tts", label: "Gemini 2.5 Pro TTS (Cần bật thanh toán Google)" }
     ]
   },
   edge_tts: {
