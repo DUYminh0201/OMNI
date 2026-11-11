@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Image as ImageIcon, Loader2, CheckCircle2, AlertCircle, Stamp, Video } from 'lucide-react';
+import { resolveMktFlowUrl, extractMktFlowFilename } from '../../utils.js';
 
 const POSITIONS = [
   { id: 'top-left',     name: 'Góc Trái Trên' },
@@ -70,6 +71,8 @@ function drawLogoOnCanvas(canvas, videoEl, logoImg, position, scale, opacity, cu
 }
 
 export default function LogoWatermarkPanel({ finalVideoUrl, onClose, onLogoApplied, onLogoRemoved }) {
+  const resolvedBaseUrl = resolveMktFlowUrl(finalVideoUrl);
+
   const [logoFile, setLogoFile]     = useState(null);
   const [logoImg, setLogoImg]       = useState(null); // HTMLImageElement
   const [position, setPosition]     = useState('bottom-right');
@@ -80,10 +83,39 @@ export default function LogoWatermarkPanel({ finalVideoUrl, onClose, onLogoAppli
   const [status, setStatus]         = useState('idle');
   const [errorMsg, setErrorMsg]     = useState('');
   const [videoReady, setVideoReady] = useState(false);
+  const [videoError, setVideoError] = useState('');
+  const [videoSrc, setVideoSrc]     = useState(resolvedBaseUrl);
   const [savedLogos, setSavedLogos] = useState([]);
 
-  const canvasRef = useRef(null);
-  const videoRef  = useRef(null);
+  const canvasRef             = useRef(null);
+  const videoRef              = useRef(null);
+  const seekFallbackTimerRef  = useRef(null);
+  const fallbackBlobUrlRef    = useRef(null);
+  const triedBlobFallbackRef  = useRef(false);
+
+  const revokeFallbackBlob = useCallback(() => {
+    if (fallbackBlobUrlRef.current) {
+      URL.revokeObjectURL(fallbackBlobUrlRef.current);
+      fallbackBlobUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (seekFallbackTimerRef.current) {
+      clearTimeout(seekFallbackTimerRef.current);
+      seekFallbackTimerRef.current = null;
+    }
+    revokeFallbackBlob();
+    triedBlobFallbackRef.current = false;
+    setVideoReady(false);
+    setVideoError('');
+    setVideoSrc(resolvedBaseUrl);
+  }, [resolvedBaseUrl, revokeFallbackBlob]);
+
+  useEffect(() => () => {
+    if (seekFallbackTimerRef.current) clearTimeout(seekFallbackTimerRef.current);
+    revokeFallbackBlob();
+  }, [revokeFallbackBlob]);
 
   // Load logo library from localStorage (shared with BulkWatermark)
   useEffect(() => {
@@ -175,19 +207,81 @@ export default function LogoWatermarkPanel({ finalVideoUrl, onClose, onLogoAppli
 
   useEffect(() => { redraw(); }, [redraw]);
 
-  const handleVideoLoaded = () => {
+  const handleVideoLoaded = useCallback(() => {
     const vid = videoRef.current;
-    if (vid) {
-      vid.currentTime = 0.5; // Seek một chút để có frame
+    if (!vid) return;
+    setVideoError('');
+    if (seekFallbackTimerRef.current) {
+      clearTimeout(seekFallbackTimerRef.current);
+      seekFallbackTimerRef.current = null;
     }
-  };
-  const handleVideoSeeked = () => {
+
+    const duration = Number.isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 0;
+    const targetTime = duration > 0 ? Math.min(0.5, Math.max(0.05, duration * 0.15)) : 0.1;
+
+    if (Math.abs(vid.currentTime - targetTime) < 0.01) {
+      setVideoReady(true);
+      return;
+    }
+
+    try {
+      vid.currentTime = targetTime;
+    } catch {
+      if (vid.readyState >= 2 && vid.videoWidth > 0) setVideoReady(true);
+      return;
+    }
+
+    // Fallback nếu codec/stream không bắn onSeeked nhưng frame hiện tại đã decode
+    seekFallbackTimerRef.current = setTimeout(() => {
+      seekFallbackTimerRef.current = null;
+      const cur = videoRef.current;
+      if (cur && cur.readyState >= 2 && cur.videoWidth > 0) {
+        setVideoReady(true);
+      }
+    }, 500);
+  }, []);
+
+  const handleVideoSeeked = useCallback(() => {
+    if (seekFallbackTimerRef.current) {
+      clearTimeout(seekFallbackTimerRef.current);
+      seekFallbackTimerRef.current = null;
+    }
     setVideoReady(true);
-  };
+  }, []);
+
+  const handleVideoError = useCallback(async () => {
+    if (seekFallbackTimerRef.current) {
+      clearTimeout(seekFallbackTimerRef.current);
+      seekFallbackTimerRef.current = null;
+    }
+    if (!triedBlobFallbackRef.current && resolvedBaseUrl) {
+      triedBlobFallbackRef.current = true;
+      try {
+        const res = await fetch(resolvedBaseUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        revokeFallbackBlob();
+        const blobUrl = URL.createObjectURL(blob);
+        fallbackBlobUrlRef.current = blobUrl;
+        setVideoSrc(blobUrl);
+        return;
+      } catch (err) {
+        console.warn('[LogoWatermarkPanel] Blob fallback failed:', err);
+      }
+    }
+    setVideoError('Không thể tải frame xem trước. Bạn vẫn có thể chọn logo và bấm Đóng dấu & Lưu.');
+  }, [resolvedBaseUrl, revokeFallbackBlob]);
+
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (vid && vid.readyState >= 2 && vid.videoWidth > 0 && !videoReady) {
+      handleVideoLoaded();
+    }
+  }, [videoSrc, videoReady, handleVideoLoaded]);
 
   const handleApply = async () => {
     if (!logoFile || !finalVideoUrl) return;
-    const videoFilename = finalVideoUrl.split('/').pop().split('?')[0]; // Loại bỏ query params cache
+    const videoFilename = extractMktFlowFilename(finalVideoUrl);
     setStatus('processing');
     setErrorMsg('');
     try {
@@ -313,13 +407,20 @@ export default function LogoWatermarkPanel({ finalVideoUrl, onClose, onLogoAppli
           }}>
             {/* Hidden video element để lấy frame */}
             <video
+              key={videoSrc || 'empty'}
               ref={videoRef}
-              src={finalVideoUrl}
+              src={videoSrc || undefined}
               style={{ display: 'none' }}
               preload="auto"
-              crossOrigin="anonymous"
               onLoadedData={handleVideoLoaded}
+              onCanPlay={() => {
+                const vid = videoRef.current;
+                if (vid && vid.readyState >= 2 && vid.videoWidth > 0 && !videoReady && !seekFallbackTimerRef.current) {
+                  handleVideoLoaded();
+                }
+              }}
               onSeeked={handleVideoSeeked}
+              onError={handleVideoError}
             />
 
             {/* Canvas hiển thị preview */}
@@ -351,9 +452,39 @@ export default function LogoWatermarkPanel({ finalVideoUrl, onClose, onLogoAppli
 
             {/* Placeholder khi chưa load video */}
             {!videoReady && (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', color: 'var(--text-sub)' }}>
-                <Video size={40} style={{ opacity: 0.2 }} />
-                <span style={{ fontSize: '0.75rem' }}>Đang tải frame video...</span>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem', color: 'var(--text-sub)', textAlign: 'center', maxWidth: '280px' }}>
+                {videoError ? (
+                  <>
+                    <AlertCircle size={32} style={{ color: '#f87171', opacity: 0.9 }} />
+                    <span style={{ fontSize: '0.75rem', color: '#fca5a5', lineHeight: 1.4 }}>{videoError}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triedBlobFallbackRef.current = false;
+                        setVideoError('');
+                        setVideoReady(false);
+                        setVideoSrc(resolvedBaseUrl ? `${resolvedBaseUrl}${resolvedBaseUrl.includes('?') ? '&' : '?'}retry=${Date.now()}` : '');
+                      }}
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        borderRadius: '6px',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        backgroundColor: 'rgba(255,255,255,0.06)',
+                        color: 'white',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Thử tải lại frame
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Video size={40} style={{ opacity: 0.2 }} />
+                    <span style={{ fontSize: '0.75rem' }}>Đang tải frame video...</span>
+                  </>
+                )}
               </div>
             )}
 

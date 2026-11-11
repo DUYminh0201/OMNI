@@ -14,6 +14,52 @@ export function safeRandomUUID() {
   });
 }
 
+const DEFAULT_MKT_FLOW_ORIGIN = 'http://127.0.0.1:3002';
+
+/**
+ * Resolve relative MKT Flow backend paths (`/downloads/...`, `/api/...`) to the local
+ * backend origin when running inside Electron `file://` or Omnira Studio's embedded HTTP shell.
+ */
+export function resolveMktFlowUrl(url) {
+  if (!url || typeof url !== 'string') return url || '';
+  if (
+    url.startsWith('http://') ||
+    url.startsWith('https://') ||
+    url.startsWith('blob:') ||
+    url.startsWith('data:') ||
+    url.startsWith('omni-media://')
+  ) {
+    return url;
+  }
+  if (url.startsWith('/api/') || url.startsWith('/downloads/')) {
+    if (typeof window !== 'undefined') {
+      const origin = window.location?.origin || '';
+      const isFile = window.location?.protocol === 'file:';
+      const isEmbedded = Boolean(window.omni);
+      const isBackendOrigin =
+        origin === DEFAULT_MKT_FLOW_ORIGIN ||
+        origin === 'http://localhost:3002';
+      if (isFile || (isEmbedded && !isBackendOrigin)) {
+        return DEFAULT_MKT_FLOW_ORIGIN + url;
+      }
+    }
+  }
+  return url;
+}
+
+/**
+ * Extract clean basename (without query parameters) from a `/downloads/...` or full backend URL.
+ */
+export function extractMktFlowFilename(url) {
+  if (!url || typeof url !== 'string') return '';
+  const lastSegment = (url.split('/').pop() || '').split('?')[0];
+  try {
+    return decodeURIComponent(lastSegment);
+  } catch {
+    return lastSegment;
+  }
+}
+
 // ─── Shared AI Config Utilities ────────────────────────────────────────────────
 // Centralised here to avoid copy-paste across every component.
 

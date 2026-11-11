@@ -1,7 +1,7 @@
 import { getPendingDubbingFile } from '../../utils/dubbingStorage.js';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { getInitialModel, getAIApiConfig, getGeminiModels } from '../../utils.js';
+import { getInitialModel, getAIApiConfig, getGeminiModels, resolveMktFlowUrl, extractMktFlowFilename } from '../../utils.js';
 import ModelSelector from '../../shared/components/ModelSelector.jsx';
 import LogoWatermarkPanel from './LogoWatermarkPanel.jsx';
 import { 
@@ -239,6 +239,8 @@ export default function VideoDubbing() {
   
   const [isTranscriptEdited, setIsTranscriptEdited] = useState(false);
   const [isTranslatingOnly, setIsTranslatingOnly] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
   const [history, setHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showLogoPanel, setShowLogoPanel] = useState(false);
@@ -977,6 +979,7 @@ export default function VideoDubbing() {
     setStatus('idle');
     setProgress(0);
     setErrorMessage('');
+    setDownloadError('');
   };
 
   const retranslateTimerRef = useRef({});
@@ -1069,6 +1072,49 @@ export default function VideoDubbing() {
   const deleteHistoryItem = (id, e) => {
     e.stopPropagation();
     setHistory(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleDownloadFinalVideo = async () => {
+    if (!finalVideoUrl || isDownloading) return;
+    const cleanFilename = extractMktFlowFilename(finalVideoUrl);
+    if (!cleanFilename) {
+      setDownloadError('Không xác định được tên file video để tải về.');
+      return;
+    }
+
+    setIsDownloading(true);
+    setDownloadError('');
+    try {
+      const res = await fetch(`/api/download/${encodeURIComponent(cleanFilename)}`);
+      if (!res.ok) {
+        let msg = `Tải video thất bại (HTTP ${res.status})`;
+        try {
+          const errJson = await res.json();
+          if (errJson?.error) msg = errJson.error;
+        } catch {
+          // ignore non-JSON error body
+        }
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+      const downloadName = cleanFilename.includes('_logo')
+        ? 'video_long_tieng_logo.mp4'
+        : 'video_long_tieng.mp4';
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.setAttribute('download', downloadName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    } catch (err) {
+      console.error('[VideoDubbing] Download failed:', err);
+      setDownloadError(err?.message || 'Không thể tải video đã lồng tiếng.');
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -1363,7 +1409,7 @@ export default function VideoDubbing() {
             {finalVideoUrl ? (
               <video 
                 key={finalVideoUrl}
-                src={finalVideoUrl} 
+                src={resolveMktFlowUrl(finalVideoUrl)} 
                 controls 
                 preload="metadata"
                 type="video/mp4"
@@ -1372,7 +1418,7 @@ export default function VideoDubbing() {
             ) : videoUrl ? (
               <video 
                 key={videoUrl}
-                src={videoUrl} 
+                src={resolveMktFlowUrl(videoUrl)} 
                 controls 
                 preload="metadata"
                 onError={handleVideoError}
@@ -1459,17 +1505,29 @@ export default function VideoDubbing() {
                   >
                     <Stamp size={14} /> Thêm Logo
                   </button>
-                  <a 
-                    href={`/api/download/${finalVideoUrl.split('/').pop()}`}
+                  <button
+                    type="button"
+                    onClick={handleDownloadFinalVideo}
+                    disabled={isDownloading}
                     className="btn btn-primary"
-                    style={{ padding: '0.45rem 0.9rem', fontSize: '0.8rem', borderRadius: '8px', textDecoration: 'none' }}
+                    style={{ padding: '0.45rem 0.9rem', fontSize: '0.8rem', borderRadius: '8px', opacity: isDownloading ? 0.75 : 1, cursor: isDownloading ? 'wait' : 'pointer' }}
                   >
-                    <Download size={14} /> Tải về
-                  </a>
+                    {isDownloading ? (
+                      <><Loader2 size={14} className="spinner" /> Đang tải...</>
+                    ) : (
+                      <><Download size={14} /> Tải về</>
+                    )}
+                  </button>
                 </>
               )}
             </div>
           </div>
+
+          {downloadError && (
+            <div className="alert alert-error" style={{ fontSize: '0.8rem', padding: '0.6rem 0.85rem', margin: 0 }}>
+              <AlertCircle size={14} style={{ flexShrink: 0 }} /> {downloadError}
+            </div>
+          )}
 
           {/* Subtitle List */}
           <div style={{
@@ -1513,16 +1571,23 @@ export default function VideoDubbing() {
       <AnimatePresence>
         {showLogoPanel && (
           <LogoWatermarkPanel
-            finalVideoUrl={finalVideoUrl}
+            finalVideoUrl={resolveMktFlowUrl(finalVideoUrl)}
             onClose={() => setShowLogoPanel(false)}
             onLogoApplied={(newUrl) => {
               setFinalVideoUrl(newUrl);
+              setHistory(prev => prev.map(item =>
+                item.filename === uploadedFilename ? { ...item, finalVideoUrl: newUrl, timestamp: Date.now() } : item
+              ));
               setShowLogoPanel(false);
             }}
             onLogoRemoved={() => {
               if (finalVideoUrl) {
                 const cleanUrl = finalVideoUrl.split('?')[0].replace('_logo.mp4', '.mp4');
-                setFinalVideoUrl(cleanUrl + '?t=' + Date.now());
+                const nextUrl = cleanUrl + '?t=' + Date.now();
+                setFinalVideoUrl(nextUrl);
+                setHistory(prev => prev.map(item =>
+                  item.filename === uploadedFilename ? { ...item, finalVideoUrl: nextUrl, timestamp: Date.now() } : item
+                ));
               }
               setShowLogoPanel(false);
             }}
