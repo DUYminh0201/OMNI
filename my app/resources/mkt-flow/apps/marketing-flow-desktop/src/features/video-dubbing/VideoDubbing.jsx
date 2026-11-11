@@ -384,6 +384,8 @@ export default function VideoDubbing() {
       throw new Error('Giọng đọc Clone / VieNeu-TTS hiện chỉ hỗ trợ Tiếng Việt (không thể đọc chữ Khmer). Để lồng tiếng Tiếng Khmer, vui lòng chọn giọng Sreymom hoặc Piseth (Khmer) trong mục Edge-TTS hoặc Google Gemini nhé!');
     }
 
+    const stripDataUriPrefix = (val) => String(val || '').replace(/^data:[^;]+;base64,/i, '').trim();
+
     if (window.omni?.api?.invoke) {
       try {
         console.log('[VideoDubbing] Gọi IPC media.synthesize:', { voiceProvider, voiceId, chosenModel });
@@ -394,10 +396,10 @@ export default function VideoDubbing() {
           model: chosenModel
         });
         if (synthRes?.ok && synthRes?.data?.base64) {
-          return synthRes.data.base64;
+          return stripDataUriPrefix(synthRes.data.base64);
         }
         if (synthRes?.base64) {
-          return synthRes.base64;
+          return stripDataUriPrefix(synthRes.base64);
         }
         if (synthRes?.ok === false && synthRes?.error) {
           throw new Error(synthRes.error.message || 'Lỗi từ tiến trình chính khi tạo giọng đọc.');
@@ -423,7 +425,7 @@ export default function VideoDubbing() {
     });
     const data = await response.json();
     if (!data.success) throw new Error(data.error || 'Tạo giọng đọc lồng tiếng thất bại.');
-    return data.data;
+    return stripDataUriPrefix(data.data);
   };
 
   const handlePreviewVoice = async () => {

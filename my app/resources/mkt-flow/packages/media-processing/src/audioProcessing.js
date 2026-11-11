@@ -12,31 +12,121 @@ export function normalizeAudioMode(audioMode = 'mute') {
   return audioMode;
 }
 
-export function buildDubbedAudioFilters({ tempo, audioMode, accompanimentInput }) {
+function isMpegAudioHeader(buffer) {
+  if (!buffer || buffer.length < 3) return false;
+  if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) return true; // ID3
+  if (buffer[0] !== 0xFF || (buffer[1] & 0xE0) !== 0xE0) return false;
+  const versionBits = (buffer[1] & 0x18) >> 3;
+  const layerBits = (buffer[1] & 0x06) >> 1;
+  const bitrateIdx = (buffer[2] & 0xF0) >> 4;
+  const sampleRateIdx = (buffer[2] & 0x0C) >> 2;
+  return versionBits !== 1 && layerBits !== 0 && bitrateIdx !== 0 && bitrateIdx !== 15 && sampleRateIdx !== 3;
+}
+
+export function decodeAudioBase64Payload(audioBase64) {
+  const raw = String(audioBase64 || '').trim();
+  const dataUriMatch = raw.match(/^data:([^;]+);base64,/i);
+  const mimeHint = dataUriMatch ? dataUriMatch[1].toLowerCase() : '';
+  const cleanPayload = (dataUriMatch ? raw.slice(dataUriMatch[0].length) : raw).replace(/\s+/g, '');
+  const buffer = Buffer.from(cleanPayload, 'base64');
+
+  if (buffer.length === 0) {
+    throw new Error('Dữ liệu âm thanh tạo ra bị trống.');
+  }
+
+  let extension = '.pcm';
+  let isRawPcm = true;
+
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WAVE') {
+    extension = '.wav';
+    isRawPcm = false;
+  } else if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'OggS') {
+    extension = '.ogg';
+    isRawPcm = false;
+  } else if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'fLaC') {
+    extension = '.flac';
+    isRawPcm = false;
+  } else if (buffer.length >= 8 && buffer.toString('ascii', 4, 8) === 'ftyp') {
+    extension = '.m4a';
+    isRawPcm = false;
+  } else if (isMpegAudioHeader(buffer) || mimeHint.includes('mpeg') || mimeHint.includes('mp3')) {
+    extension = '.mp3';
+    isRawPcm = false;
+  } else if (mimeHint.includes('wav')) {
+    extension = '.wav';
+    isRawPcm = false;
+  } else if (mimeHint.includes('ogg')) {
+    extension = '.ogg';
+    isRawPcm = false;
+  }
+
+  return { buffer, extension, isRawPcm, mimeHint };
+}
+
+export function computeDubbingTempo(audioDuration, videoDuration) {
+  if (!Number.isFinite(audioDuration) || !Number.isFinite(videoDuration) || audioDuration <= 0 || videoDuration <= 0) {
+    return 1.0;
+  }
+  const ratio = audioDuration / videoDuration;
+  if (ratio > 1.0) {
+    return Math.min(1.85, ratio);
+  }
+  if (ratio >= 0.85) {
+    return ratio;
+  }
+  // Không kéo giãn xuống 0.5x khi thoại ngắn hơn video (gây méo tiếng/rè giọng)
+  return 1.0;
+}
+
+export function buildDubbedAudioFilters({ tempo = 1.0, audioMode, accompanimentInput, videoDuration = 0 }) {
   const normalizedMode = normalizeAudioMode(audioMode);
-  const filters = [
-    {
+  const filters = [];
+
+  let voiceSource = '1:a';
+  if (Math.abs(tempo - 1.0) >= 0.02) {
+    const safeTempo = Math.max(0.5, Math.min(2.0, Number(tempo)));
+    filters.push({
       filter: 'atempo',
-      options: Number(tempo).toFixed(2),
-      inputs: '1:a',
+      options: safeTempo.toFixed(2),
+      inputs: voiceSource,
       outputs: 'a_tempo',
-    },
+    });
+    voiceSource = 'a_tempo';
+  }
+
+  filters.push(
     {
       filter: 'highpass',
       options: 'f=80',
-      inputs: 'a_tempo',
+      inputs: voiceSource,
       outputs: 'a_hp',
     },
     {
       filter: 'volume',
-      options: normalizedMode === 'keep_fx' ? '1.15' : '1.5',
+      options: normalizedMode === 'keep_fx' ? '1.75' : '1.45',
       inputs: 'a_hp',
       outputs: 'a_fit',
     },
-  ];
+  );
 
   if (normalizedMode === 'mute') {
-    return { filters, audioMap: '[a_fit]' };
+    let muteOut = 'a_fit';
+    if (Number.isFinite(videoDuration) && videoDuration > 0) {
+      filters.push({
+        filter: 'apad',
+        options: `whole_dur=${Number(videoDuration).toFixed(3)}`,
+        inputs: muteOut,
+        outputs: 'a_padded',
+      });
+      muteOut = 'a_padded';
+    }
+    filters.push({
+      filter: 'alimiter',
+      options: 'limit=0.95:level=disabled',
+      inputs: muteOut,
+      outputs: 'a_out',
+    });
+    return { filters, audioMap: '[a_out]' };
   }
 
   if (!accompanimentInput) {
@@ -46,7 +136,7 @@ export function buildDubbedAudioFilters({ tempo, audioMode, accompanimentInput }
   filters.push(
     {
       filter: 'volume',
-      options: '2.0',
+      options: '0.35',
       inputs: accompanimentInput,
       outputs: 'fx_fit',
     },

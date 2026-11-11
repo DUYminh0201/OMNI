@@ -29,6 +29,8 @@ import {
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import {
   buildDubbedAudioFilters,
+  computeDubbingTempo,
+  decodeAudioBase64Payload,
   normalizeAudioMode,
   requireDemucsRuntime,
   separateNoVocalsStem,
@@ -2315,15 +2317,13 @@ app.post("/api/merge", async (req, res) => {
   }
 
   try {
-    const audioBuffer = Buffer.from(audioBase64, "base64");
-    // Detect MP3 vs PCM based on magic bytes (ID3 tag or Sync byte)
-    const isMP3 = audioBuffer.length > 2 && (
-      (audioBuffer[0] === 0x49 && audioBuffer[1] === 0x44 && audioBuffer[2] === 0x33) ||
-      (audioBuffer[0] === 0xFF && (audioBuffer[1] & 0xE0) === 0xE0)
-    );
-    const audioExtension = isMP3 ? ".mp3" : ".pcm";
+    const {
+      buffer: audioBuffer,
+      extension: audioExtension,
+      isRawPcm,
+    } = decodeAudioBase64Payload(audioBase64);
     const audioPath = path.join(uploadsDir, `${videoFilename}_dubbed${audioExtension}`);
-    
+
     fs.writeFileSync(audioPath, audioBuffer);
 
     // Generate SRT if requested
@@ -2359,9 +2359,10 @@ app.post("/api/merge", async (req, res) => {
 
       // Calculate audio duration dynamically
       let audioDuration = 0;
-      if (isMP3) {
+      if (!isRawPcm) {
         audioDuration = await new Promise((resolve) => {
-          ffmpeg.ffprobe(audioPath, (err, meta) => {
+          ffmpeg.ffprobe(audioPath, (probeErr, meta) => {
+            if (probeErr) console.warn('Dubbed audio ffprobe warning:', probeErr.message);
             resolve(meta?.format?.duration || 0);
           });
         });
@@ -2369,12 +2370,10 @@ app.post("/api/merge", async (req, res) => {
         // Fallback for raw PCM (Gemini TTS: 24000Hz, 16-bit, Mono)
         audioDuration = stats.size / (24000 * 2 * 1);
       }
-      
-      // Calculate tempo to fit audio into video duration
-      let tempo = audioDuration / videoDuration;
-      tempo = Math.max(0.5, Math.min(2.0, tempo));
 
-      console.log(`Video: ${videoDuration}s, Audio: ${audioDuration}s, Target Tempo: ${tempo}, Quality: ${videoQuality}, Mode: ${selectedAudioMode}`);
+      const tempo = computeDubbingTempo(audioDuration, videoDuration);
+
+      console.log(`Video: ${videoDuration}s, Audio (${audioExtension}): ${audioDuration}s, Target Tempo: ${tempo.toFixed(3)}, Quality: ${videoQuality}, Mode: ${selectedAudioMode}`);
 
       let accompanimentPath;
       if (hasAudio && selectedAudioMode === 'keep_fx') {
@@ -2394,6 +2393,7 @@ app.post("/api/merge", async (req, res) => {
         tempo,
         audioMode: effectiveAudioMode,
         accompanimentInput: accompanimentPath ? '2:a' : undefined,
+        videoDuration,
       });
 
       let videoMap = "0:v:0";
@@ -2446,11 +2446,11 @@ app.post("/api/merge", async (req, res) => {
 
       const finalVideoMap = videoMap === "0:v:0" ? "0:v:0" : `[${videoMap}]`;
 
-      const audioInputOptions = isMP3 ? [] : [
+      const audioInputOptions = isRawPcm ? [
         "-f s16le",
         "-ar 24000",
         "-ac 1"
-      ];
+      ] : [];
 
       const mergeCommand = ffmpeg(videoPath)
         .input(audioPath)
